@@ -1,0 +1,14 @@
+{
+  "name": "local_password_manager",
+  "version": "0.1.0",
+  "description": "本地加密存储密码的 Web 应用，数据完全离线不上传",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "better-sqlite3": "^11.0.0"
+  }
+}

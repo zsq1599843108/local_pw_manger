@@ -1,0 +1,366 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+  min-height: 100vh;
+  color: #fff;
+}
+
+.screen {
+  display: none;
+  min-height: 100vh;
+}
+
+.screen.active {
+  display: flex;
+  flex-direction: column;
+}
+
+.auth-container {
+  max-width: 400px;
+  margin: auto;
+  padding: 40px;
+  text-align: center;
+}
+
+.auth-container h1 {
+  font-size: 2.5rem;
+  margin-bottom: 10px;
+}
+
+.subtitle {
+  color: #888;
+  margin-bottom: 30px;
+}
+
+.auth-form {
+  background: rgba(255, 255, 255, 0.1);
+  padding: 30px;
+  border-radius: 12px;
+  backdrop-filter: blur(10px);
+}
+
+.auth-form h2 {
+  margin-bottom: 20px;
+  font-size: 1.2rem;
+}
+
+input, textarea, select {
+  width: 100%;
+  padding: 12px;
+  margin-bottom: 15px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+  font-size: 14px;
+}
+
+input:focus, textarea:focus, select:focus {
+  outline: none;
+  border-color: #4a9eff;
+}
+
+select option {
+  background: #1a1a2e;
+  color: #fff;
+}
+
+button {
+  padding: 12px 24px;
+  border: none;
+  border-radius: 8px;
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.btn-primary {
+  background: linear-gradient(135deg, #4a9eff 0%, #1e6fff 100%);
+  color: #fff;
+}
+
+.btn-primary:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(74, 158, 255, 0.4);
+}
+
+.btn-secondary {
+  background: rgba(255, 255, 255, 0.2);
+  color: #fff;
+}
+
+.btn-secondary:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+.btn-logout {
+  background: rgba(255, 100, 100, 0.3);
+  color: #fff;
+  padding: 8px 16px;
+}
+
+.btn-logout:hover {
+  background: rgba(255, 100, 100, 0.5);
+}
+
+.btn-icon {
+  padding: 8px;
+  background: transparent;
+  font-size: 16px;
+}
+
+.btn-icon:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 20px;
+  background: rgba(0, 0, 0, 0.2);
+}
+
+header h1 {
+  font-size: 1.5rem;
+}
+
+.toolbar {
+  display: flex;
+  gap: 10px;
+  padding: 20px;
+  flex-wrap: wrap;
+}
+
+.toolbar input {
+  flex: 1;
+  min-width: 200px;
+  margin-bottom: 0;
+}
+
+.password-list {
+  padding: 0 20px 20px;
+  display: grid;
+  gap: 15px;
+}
+
+.password-card {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  padding: 20px;
+  backdrop-filter: blur(10px);
+  transition: all 0.2s;
+}
+
+.password-card:hover {
+  background: rgba(255, 255, 255, 0.15);
+  transform: translateY(-2px);
+}
+
+.password-card h3 {
+  margin-bottom: 10px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.password-card .category {
+  font-size: 12px;
+  padding: 4px 8px;
+  background: rgba(74, 158, 255, 0.3);
+  border-radius: 4px;
+}
+
+.password-card .field {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+  color: #ccc;
+}
+
+.password-card .field label {
+  min-width: 60px;
+  color: #888;
+}
+
+.password-card .field input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  padding: 0;
+  margin: 0;
+  color: #fff;
+}
+
+.password-card .actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 15px;
+  padding-top: 15px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.password-card .actions button {
+  padding: 6px 12px;
+  font-size: 12px;
+}
+
+.modal {
+  display: none;
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.8);
+  justify-content: center;
+  align-items: center;
+  z-index: 1000;
+}
+
+.modal.active {
+  display: flex;
+}
+
+.modal-content {
+  background: #1a1a2e;
+  padding: 30px;
+  border-radius: 16px;
+  width: 90%;
+  max-width: 450px;
+  max-height: 90vh;
+  overflow-y: auto;
+}
+
+.modal-content h2 {
+  margin-bottom: 20px;
+}
+
+.modal-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+.modal-actions button {
+  flex: 1;
+}
+
+.password-input-group {
+  display: flex;
+  gap: 5px;
+}
+
+.password-input-group input {
+  flex: 1;
+}
+
+.password-display {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 20px;
+}
+
+.password-display input {
+  flex: 1;
+  font-family: monospace;
+  font-size: 16px;
+}
+
+.generate-options {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+  margin-bottom: 20px;
+}
+
+.generate-options label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #ccc;
+}
+
+.generate-options input[type="number"] {
+  width: 60px;
+  margin: 0;
+}
+
+.toast {
+  position: fixed;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #4a9eff;
+  color: #fff;
+  padding: 12px 24px;
+  border-radius: 8px;
+  opacity: 0;
+  transition: opacity 0.3s;
+  z-index: 2000;
+}
+
+.toast.show {
+  opacity: 1;
+}
+
+.empty-state {
+  text-align: center;
+  padding: 60px 20px;
+  color: #888;
+}
+
+.empty-state h2 {
+  margin-bottom: 10px;
+}
+
+.phone-option {
+  margin-top: 15px;
+  text-align: left;
+  font-size: 14px;
+}
+
+.phone-option label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #ccc;
+}
+
+.phone-link {
+  display: inline-block;
+  margin-top: 8px;
+  color: #4a9eff;
+  text-decoration: none;
+}
+
+.phone-link:hover { text-decoration: underline; }
+
+.phone-verify-input {
+  margin: 20px 0;
+}
+
+.phone-verify-input input {
+  font-size: 2rem;
+  text-align: center;
+  letter-spacing: 8px;
+  font-family: monospace;
+}
+
+.phone-hint {
+  margin-top: 15px;
+  font-size: 12px;
+  color: #888;
+}
+
+.phone-hint a {
+  color: #4a9eff;
+  text-decoration: none;
+}

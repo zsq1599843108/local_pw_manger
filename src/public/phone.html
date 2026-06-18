@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Phone Verifier</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+      min-height: 100vh;
+      color: #fff;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+    }
+    .container {
+      max-width: 400px;
+      padding: 40px;
+      text-align: center;
+    }
+    h1 { font-size: 2rem; margin-bottom: 20px; }
+    .status {
+      background: rgba(255,255,255,0.1);
+      padding: 30px;
+      border-radius: 12px;
+      margin-bottom: 20px;
+    }
+    .token {
+      font-size: 3rem;
+      font-family: monospace;
+      background: rgba(74, 158, 255, 0.3);
+      padding: 20px;
+      border-radius: 8px;
+      margin: 20px 0;
+      letter-spacing: 8px;
+    }
+    .status-text { color: #888; margin-top: 10px; }
+    .connected { color: #4caf50; }
+    .disconnected { color: #f44336; }
+    button {
+      padding: 15px 30px;
+      border: none;
+      border-radius: 8px;
+      font-size: 16px;
+      cursor: pointer;
+      background: linear-gradient(135deg, #4a9eff 0%, #1e6fff 100%);
+      color: #fff;
+      margin: 10px;
+    }
+    button:hover { transform: translateY(-2px); }
+    button:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+    .instructions {
+      background: rgba(255,255,255,0.05);
+      padding: 20px;
+      border-radius: 8px;
+      margin-top: 20px;
+      text-align: left;
+      font-size: 14px;
+      color: #aaa;
+    }
+    .instructions li { margin: 8px 0; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🔐 Phone Verifier</h1>
+    
+    <div class="status">
+      <div id="token-display" class="token">----</div>
+      <div id="status-text" class="status-text disconnected">Not connected</div>
+    </div>
+    
+    <button id="connect-btn" onclick="startVerification()">Start Verification</button>
+    <button id="refresh-btn" onclick="refreshToken()" disabled>Refresh Code</button>
+    
+    <div class="instructions">
+      <h3>Instructions:</h3>
+      <ol>
+        <li>Connect phone to computer via USB</li>
+        <li>Enable USB debugging (Android) or trust computer (iOS)</li>
+        <li>Click "Start Verification" on this page</li>
+        <li>Enter the 4-digit code on your computer</li>
+      </ol>
+    </div>
+  </div>
+  
+  <script>
+    let usbDevice = null;
+    let currentToken = null;
+    
+    function generateToken() {
+      return Math.floor(1000 + Math.random() * 9000).toString();
+    }
+    
+    function refreshToken() {
+      currentToken = generateToken();
+      document.getElementById('token-display').textContent = currentToken;
+      sendTokenToServer(currentToken);
+    }
+    
+    async function sendTokenToServer(token) {
+      try {
+        await fetch('/api/phone/token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token })
+        });
+      } catch (err) {
+        console.error('Failed to send token to server:', err);
+      }
+    }
+    
+    async function startVerification() {
+      if (!navigator.usb) {
+        alert('WebUSB is not supported in this browser. Please use Chrome or Edge.');
+        return;
+      }
+      
+      try {
+        document.getElementById('connect-btn').disabled = true;
+        document.getElementById('status-text').textContent = 'Requesting USB device...';
+        document.getElementById('status-text').className = 'status-text';
+        
+        usbDevice = await navigator.usb.requestDevice({ filters: [] });
+        
+        await usbDevice.open();
+        
+        if (usbDevice.configuration === null) {
+          await usbDevice.selectConfiguration(1);
+        }
+        
+        document.getElementById('status-text').textContent = 'Connected: ' + usbDevice.productName;
+        document.getElementById('status-text').className = 'status-text connected';
+        
+    refreshToken();
+    setInterval(refreshToken, 60000);
+        document.getElementById('refresh-btn').disabled = false;
+        
+        listenForData();
+      } catch (err) {
+        document.getElementById('status-text').textContent = 'Connection failed: ' + err.message;
+        document.getElementById('status-text').className = 'status-text disconnected';
+        document.getElementById('connect-btn').disabled = false;
+      }
+    }
+    
+    async function listenForData() {
+      if (!usbDevice) return;
+      
+      try {
+        const result = await usbDevice.transferIn(1, 64);
+        
+        if (result.data) {
+          const decoder = new TextDecoder();
+          const message = decoder.decode(result.data);
+          
+          if (message.trim() === 'VERIFY:' + currentToken) {
+            document.getElementById('status-text').textContent = 'Verification successful!';
+            
+            await usbDevice.transferOut(1, new TextEncoder().encode('OK'));
+            
+            setTimeout(() => {
+              window.location.href = '/';
+            }, 1000);
+          } else if (message.trim() === 'REQUEST_TOKEN') {
+            await usbDevice.transferOut(1, new TextEncoder().encode(currentToken));
+          }
+        }
+        
+        listenForData();
+      } catch (err) {
+        console.error('Transfer error:', err);
+      }
+    }
+    
+    refreshToken();
+  </script>
+</body>
+</html>

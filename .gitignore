@@ -1,0 +1,98 @@
+# 通用
+build/
+dist/
+out/
+target/
+*.log
+
+# 备份/草稿（绝不推）
+*.bak
+*.old
+*.orig
+*.swp
+*.swo
+
+# 待整理目录（不应入 git）
+to\ be\ done/
+_to_be_done/
+drafts/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+env/
+.env
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+.coverage
+htmlcov/
+
+# Node
+node_modules/
+.npm/
+.yarn/
+.pnp.*
+*.tsbuildinfo
+
+# Flutter / Dart
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub-cache/
+.pub/
+android/.gradle/
+android/build/
+android/app/build/
+ios/Pods/
+ios/.symlinks/
+
+# Android
+*.apk
+*.aab
+*.iml
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 项目内规则: releases/ 是 junction 到 F:\Releases\，不进 git
+releases/
+
+# 大资产分离 (>100MB 的去 F:\Assets\)
+*.ckpt
+*.pth
+*.safetensors
+*.bin
+models/
+checkpoints/
+
+# 凭证/密钥（绝不推 GitHub）
+*.pem
+*.key
+*.p12
+*.pfx
+*.cer
+*.crt
+credentials*
+secrets*
+*.token
+.env.*
+!.env.example
+
+# 数据库
+*.db
+*.sqlite
+*.sqlite3

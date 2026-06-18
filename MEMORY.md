@@ -40,8 +40,13 @@
 
 ## ⚠️ 已知遗留问题
 
-- **中文乱码**：`title` / `notes` 字段存中文显示乱码（UTF-8 编码 bug）—  M3 同步前必须修，否则会扩散到手机端
+- ~~中文乱码~~：2026-06-18 验证为测试假阳性（Windows GBK 控制台），代码全程 UTF-8 正确
 - **MEMORY/TODO/CHANGELOG 同步过迟**：v0.2 大更新（英文化+导入导出+APK）当时未及时记账，2026-06-18 补齐
+
+## 🧪 测试
+
+- `scripts/test-utf8.js` — UTF-8 round-trip 验证（先 `node src/server.js` 起服）
+  - 教训：以后测中文不能看 PowerShell/curl 在 GBK 控制台的输出，必须看字节 hex 或浏览器实际渲染
 
 ## 🔧 技术栈
 

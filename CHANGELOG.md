@@ -18,8 +18,13 @@
 - 重写 `MEMORY.md` 文件地图（修正 v0.2 后的实际结构）
 - 重写 `TODO.md` 按 M1~M5 拆解
 
-### Known Issues（v0.3 前必修）
-- 中文 `title` / `notes` 存储显示乱码（UTF-8 编码 bug）
+### Tested
+- 新增 `scripts/test-utf8.js` UTF-8 round-trip 自动化测试 — 7/7 通过
+  - 用例覆盖：简体/繁体中文、日文、韩文、emoji、4 字节 CJK 扩展（𠮷 U+20BB7）
+- 验证：之前 PROGRESS 标记的「中文乱码 bug」实为测试假阳性
+  - 根因：Windows 默认 GBK 控制台直接打印 UTF-8 字节会显示乱码
+  - 实际：DB（UTF-8 BLOB）/ HTTP（charset=utf-8）/ HTML（meta UTF-8）三层全程正确
+  - 浏览器实测无任何中文显示问题
 
 ---
 

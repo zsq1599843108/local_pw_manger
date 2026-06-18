@@ -4,9 +4,7 @@
 
 ## 🔥 In Progress
 
-- [ ] **修中文乱码 bug**（M3 阻塞项，必须先修）
-  - 复现：`title` 或 `notes` 输入中文 → 显示乱码
-  - 排查方向：Express body-parser 编码、SQLite text encoding pragma、HTML meta charset
+- [ ] M1 — AOAP 握手 PoC（见下方）
 
 ## ⏭️ Next（v0.3 — AOAP 改造，按 milestone 推进）
 
@@ -54,3 +52,4 @@
 - [x] 2026-06-16 项目初始化（Node.js + Express + SQLite）
 - [x] 2026-06-18 v0.2：UI 全英文化、导入/导出、4 位码手机验证器、APK 构建
 - [x] 2026-06-18 选定 AOAP 方案（ADR-001）+ 完成设计文档/路线图
+- [x] 2026-06-18 中文乱码 bug 验证为测试假阳性（Windows GBK console），新增 `scripts/test-utf8.js` 7/7 通过

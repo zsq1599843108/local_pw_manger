@@ -30,8 +30,10 @@
 
 ### Documentation
 - 新增 `docs/troubleshooting-windows.md` — AOAP Win 阻塞复盘 + Zadig 操作手册（虽不采用）
-- AOAP 系列文档保留作历史：`aoap-design.md` / `aoap-roadmap.md` / `adr-001-aoap.md`
-- 待写：`adr-002-wifi-hotspot.md` / `wifi-hotspot-design.md` / `wifi-hotspot-roadmap.md`
+- AOAP 系列文档保留作历史：`aoap-design.md` / `aoap-roadmap.md` / `adr-001-aoap.md`（标 Superseded）
+- **新增 `docs/adr-002-wifi-hotspot.md`** — Wi-Fi 热点路线决策
+- **新增 `docs/wifi-hotspot-design.md`** — 协议+架构+加密通道
+- **新增 `docs/wifi-hotspot-roadmap.md`** — M1'~M5' 拆解（5 天预算）
 
 ### Tested
 - 新增 `scripts/test-utf8.js` UTF-8 round-trip 自动化测试 — 7/7 通过

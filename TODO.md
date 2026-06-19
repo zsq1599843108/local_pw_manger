@@ -4,15 +4,15 @@
 
 ## 🔥 In Progress
 
-- [ ] Phase 2 — 写 ADR-002 + Wi-Fi hotspot 设计文档 + roadmap
+- [ ] M1' — Wi-Fi PoC：手机端 Ktor server + PC 端 ping/pong（详见 `docs/wifi-hotspot-roadmap.md` §M1'）
 
 ## ⏭️ Next（v0.3 — Wi-Fi 热点改造，覆盖 AOAP）
 
-### Phase 2 — 文档（~30 min）
-- [ ] `docs/adr-002-wifi-hotspot.md` — 决策记录（含 AOAP Win 阻塞复盘）
-- [ ] `docs/wifi-hotspot-design.md` — 协议 + 流程图 + 加密通道
-- [ ] `docs/wifi-hotspot-roadmap.md` — M1'~M5' 拆解
-- [ ] 更新 `MEMORY.md` 文件地图
+### Phase 2 — 文档（~30 min） ✅ 完成
+- [x] `docs/adr-002-wifi-hotspot.md` — 决策记录（含 AOAP Win 阻塞复盘）
+- [x] `docs/wifi-hotspot-design.md` — 协议 + 流程图 + 加密通道
+- [x] `docs/wifi-hotspot-roadmap.md` — M1'~M5' 拆解
+- [x] 更新 `MEMORY.md` 文件地图
 
 ### M1' — Wi-Fi PoC：ping/pong（~0.5~1 天）
 - [ ] APK：app/build.gradle 加 `io.ktor:ktor-server-netty:2.3.x`

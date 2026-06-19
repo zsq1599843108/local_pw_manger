@@ -49,14 +49,14 @@
 ## 📚 设计文档索引
 
 ### 现行（Wi-Fi 热点路线）
-- 待写：`docs/adr-002-wifi-hotspot.md` — 选型决策（B 路线，2026-06-19）
-- 待写：`docs/wifi-hotspot-design.md` — 协议 + 流程图
-- 待写：`docs/wifi-hotspot-roadmap.md` — M1'~M5'
+- [ADR-002 Wi-Fi 热点](docs/adr-002-wifi-hotspot.md) — 选型决策（B 路线，2026-06-19）
+- [wifi-hotspot-design.md](docs/wifi-hotspot-design.md) — 协议 + 流程图 + 加密通道
+- [wifi-hotspot-roadmap.md](docs/wifi-hotspot-roadmap.md) — M1'~M5' 拆解（5 天预算）
 
 ### 已 deprecated（保留作历史 + Linux/Mac 备选）
 - [AOAP 设计文档](docs/aoap-design.md) — v0.3 第一版（USB AOAP）
 - [AOAP 实施路线图](docs/aoap-roadmap.md) — 5 里程碑（M1 跑了一半）
-- [ADR-001：选用 AOAP](docs/adr-001-aoap.md) — 第一次选型理由
+- [ADR-001：选用 AOAP](docs/adr-001-aoap.md) — 第一次选型理由（已 Superseded by ADR-002）
 - [Win AOAP 阻塞复盘](docs/troubleshooting-windows.md) — MTP 驱动锁死 vendor 控制传输
 
 ## ⚠️ 已知遗留问题

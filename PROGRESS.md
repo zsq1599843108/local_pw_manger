@@ -2,45 +2,39 @@
 
 > Claude 进入项目时**第一个读这个文件**。每次离开前必须更新「上次离开时停在哪」和「下次回来要做的」。
 
-**last update**: 2026-06-19（M1 收尾，AOAP 在 Win 上死路一条，已转 ADR-002）
+**last update**: 2026-06-19（Phase 2 文档完成，准备开 M1'）
 
 ## 🎯 当前阶段
 
-正在做：**v0.3 — 配对协议大改**
-- v0.3 整体进度：~30%
-- M1 进度：**部分通过**（指纹 demo ✅，AOAP 协议在 Win11 上被 MTP 驱动锁死 ❌）
-- ADR-002 决策：**抛弃 AOAP，改走「手机 Wi-Fi 热点 + LAN 加密通道」**（用户选 B 路线）
-- 下个里程碑：**M1'**（Wi-Fi hotspot PoC，0.5~1 天）
+正在做：**v0.3 — Wi-Fi 热点改造**
+- v0.3 整体进度：~35%
+- M1 进度：**部分通过**（指纹 demo ✅，AOAP 在 Win 死路一条 ❌，Phase 1 commit `a484b32` 已落）
+- ADR-002 + 设计 + roadmap：✅ 完成（Phase 2）
+- 下个里程碑：**M1'**（Wi-Fi hotspot PoC，0.5 天）
 
 ## 📍 上次离开时停在哪
 
-- **里程碑**：M1 收尾 commit。AOAP 实证不通后留 deprecated 不删，转 ADR-002 设计中
-- **代码状态**：
-  - PC 端：`src/public/js/aoap.js`、`aoap-page.js`、`aoap-server.js` 全部加 deprecated 头注释
-  - APK 端：`UsbAccessoryActivity.kt` 加 deprecated 头；`BiometricDemoActivity.kt` 已实测可用
-  - 手机端 APK：`com.passman.pair v0.3-m1`，3.6MB，含指纹 demo + AOAP USB handler
-  - server 端：`src/aoap-server.js` 已挂在 `/api/aoap/handshake`（Linux/Mac 仍可用）
-- **测试状态**：
-  - ✅ 指纹 BIOMETRIC_STRONG 在小米 14 Pro 上通过
-  - ✅ libusb 在 Win11 能 open 小米 + 读 manufacturerName
-  - ❌ vendor control transfer (req=51) 报 `invalid state`，MTP 驱动锁死
-  - ❌ Chrome WebUSB 报 `Access denied`，同样原因
-- **关键澄清**：Windows AOAP 路线**唯一软件层解法是 Zadig 装 WinUSB**，但代价是丢 MTP 文件传输 → 用户拒绝 → 转向 Wi-Fi 热点
-- **git working tree**：M1 commit 待推
+- **里程碑**：Phase 2 文档完成（ADR-002 + design + roadmap），M1' 未开工
+- **代码状态**：Phase 1 已 commit；Phase 2 仅文档（无代码改动），待 commit
+- **测试状态**：M1 已验证 ✅ 指纹通 / ❌ AOAP 不通；M1' 未开始
+- **git working tree**：未 commit Phase 2（3 个新文档 + PROGRESS/TODO/MEMORY 更新）
 
 ## ⏭️ 下次回来要做的
 
-**Phase 2（先做，~30 min）：写 ADR-002 + 新 roadmap**
-1. `docs/adr-002-wifi-hotspot.md` — 决策 + AOAP 的 Win 阻塞证据 + 选 B 路线的理由
-2. `docs/wifi-hotspot-design.md` — 协议（手机做 Ktor server、PC 当客户端、PIN 配对、X25519 + AES-GCM 加密通道）
-3. `docs/wifi-hotspot-roadmap.md` — M1'~M5' 拆分（M1' = ping/pong PoC）
-4. 更新 `MEMORY.md` 文件地图（标 deprecated 文件 + 新增文件）
+**Phase 3：M1' Wi-Fi PoC（~0.5 天）**
 
-**Phase 3：M1' Wi-Fi PoC（~2-3 hour）**
-1. APK 加 Ktor 依赖 + `HotspotServerService.kt` 前台服务（端口 9876，监听 `/ping`）
-2. APK 加 `HotspotPairActivity.kt`：屏幕显示 SSID/密码/IP/PIN
-3. PC 端 `src/public/js/lan-pair.js` + `src/lan-server.js`（Node 拉 `http://192.168.43.1:9876/ping`）
-4. 联调：你开热点 → PC 切 Wi-Fi 加入 → ping 通
+实施步骤详见 `docs/wifi-hotspot-roadmap.md` §M1'。摘要：
+1. APK：`app/build.gradle.kts` 加 Ktor 依赖（先跑 `/install-deps` 询问用户）
+2. APK：`HotspotServerService.kt` 前台服务 + Ktor :9876
+3. APK：`HotspotPairActivity.kt` 状态 UI
+4. APK：manifest 加 FOREGROUND_SERVICE / POST_NOTIFICATIONS / ACCESS_NETWORK_STATE
+5. PC：`src/lan-server.js` + `/api/lan/probe`
+6. PC：`src/public/js/lan-pair.js` + phone.html 入口
+7. 联调：你开热点 → PC 切 Wi-Fi → ping 通
+
+**实施前必做：**
+- [ ] 跑 `/install-deps` 询问用户：手机端 Ktor 依赖如何装
+- [ ] 询问：是否要现在就动 v0.4+ Backlog 的 USB tethering 路径作为兜底，还是 v0.3 仅做 Wi-Fi 热点
 
 ## 🚧 阻塞 / 待解决
 
@@ -66,10 +60,10 @@
 
 - AOAP 设计（已 deprecated 留作历史）→ `docs/aoap-design.md`
 - AOAP 路线图（已 deprecated）→ `docs/aoap-roadmap.md`
-- ADR-001 AOAP 选型（已 deprecated）→ `docs/adr-001-aoap.md`
+- ADR-001 AOAP 选型（已 Superseded）→ `docs/adr-001-aoap.md`
 - **Win AOAP 阻塞复盘** → `docs/troubleshooting-windows.md`
-- **新决策（待写）** → `docs/adr-002-wifi-hotspot.md`
-- **新设计（待写）** → `docs/wifi-hotspot-design.md`
-- **新路线图（待写）** → `docs/wifi-hotspot-roadmap.md`
+- **现行决策** → `docs/adr-002-wifi-hotspot.md` ✅
+- **现行设计** → `docs/wifi-hotspot-design.md` ✅
+- **现行路线图** → `docs/wifi-hotspot-roadmap.md` ✅
 - 文件地图 → `MEMORY.md`
 - 任务清单 → `TODO.md`

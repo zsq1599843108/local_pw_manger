@@ -1,9 +1,12 @@
 # ADR-001：手机配对方案选用 AOAP
 
-- **状态**：✅ Accepted
-- **日期**：2026-06-18
+- **状态**：⛔ **Superseded by [ADR-002](adr-002-wifi-hotspot.md)**（2026-06-19）
+- **原决定状态**：✅ Accepted（2026-06-18）
+- **失效原因**：Win11 上 AOAP 被 MTP 驱动锁死 vendor 控制传输（[复盘](troubleshooting-windows.md)）
 - **决策人**：项目所有者
 - **相关文档**：[aoap-design.md](aoap-design.md)、[aoap-roadmap.md](aoap-roadmap.md)
+
+> ⚠️ 本 ADR 的方案已废弃为主路径，仅保留作 Linux/macOS 备选实现。所有新代码都不应再依赖 AOAP。请阅读 [ADR-002](adr-002-wifi-hotspot.md)。
 
 ## 背景
 

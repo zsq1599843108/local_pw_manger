@@ -2,11 +2,30 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <!--
-      AOAP needs no permissions: USB_ACCESSORY_ATTACHED is delivered to apps
-      that match accessory_filter.xml, and the system grants per-attach access.
-      BiometricPrompt also needs no manifest permission — androidx handles it
-      via the framework. Internet permission stays absent — this APK is offline.
+      M1' Wi-Fi hotspot route (ADR-002):
+        - INTERNET: bind a socket on 0.0.0.0:9876 for Ktor to listen on
+        - FOREGROUND_SERVICE: keep Ktor alive while user is in another app
+        - FOREGROUND_SERVICE_CONNECTED_DEVICE: required by API 34+ for any
+          foreground service whose serviceType is connectedDevice
+        - POST_NOTIFICATIONS: API 33+ needs this for the persistent notification
+        - ACCESS_NETWORK_STATE / WIFI: surface IP/SSID in the pairing UI
+        - WAKE_LOCK: keep CPU running while serving (prevents Doze killing us)
     -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <!--
+      API 34+ gates connectedDevice FGS by requiring AT LEAST ONE of: BLUETOOTH_*,
+      CHANGE_NETWORK_STATE, CHANGE_WIFI_STATE, NFC, etc. Wi-Fi state fits our
+      hotspot use case best — we don't actually toggle Wi-Fi, but the permission
+      is normal-protection (auto-granted at install) and satisfies the gate.
+      Without this, startForeground throws SecurityException on Android 14+.
+    -->
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
 
     <application
         android:label="@string/app_name"
@@ -15,12 +34,12 @@
         android:theme="@style/Theme.PassMan">
 
         <!--
-          Visible launcher entry (BiometricDemo). The user opens us from the
-          app drawer to validate fingerprint / debug. UsbAccessoryActivity
-          stays USB-only so plugging in is the only way it shows up.
+          M1' primary launcher: HotspotPairActivity (Wi-Fi pairing entry point).
+          Replaces BiometricDemoActivity as the default-opened Activity, but
+          BiometricDemoActivity stays launchable from a button on this screen.
         -->
         <activity
-            android:name=".BiometricDemoActivity"
+            android:name=".HotspotPairActivity"
             android:exported="true"
             android:label="@string/app_name">
             <intent-filter>
@@ -29,7 +48,12 @@
             </intent-filter>
         </activity>
 
-        <!-- Triggered ONLY by USB plug-in. Theme.NoDisplay = no UI at all. -->
+        <activity
+            android:name=".BiometricDemoActivity"
+            android:exported="true"
+            android:label="Biometric Demo" />
+
+        <!-- Triggered ONLY by USB plug-in. Theme.NoDisplay = no UI at all. ⚠️ DEPRECATED on Win11. -->
         <activity
             android:name=".UsbAccessoryActivity"
             android:exported="true"
@@ -42,6 +66,16 @@
                 android:name="android.hardware.usb.action.USB_ACCESSORY_ATTACHED"
                 android:resource="@xml/accessory_filter" />
         </activity>
+
+        <!--
+          Foreground service hosting the Ktor HTTP server. serviceType=connectedDevice
+          matches the FOREGROUND_SERVICE_CONNECTED_DEVICE permission and is the
+          semantically correct type for "PC pairs with phone via LAN".
+        -->
+        <service
+            android:name=".HotspotServerService"
+            android:exported="false"
+            android:foregroundServiceType="connectedDevice" />
 
     </application>
 

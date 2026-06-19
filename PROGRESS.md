@@ -2,39 +2,43 @@
 
 > Claude 进入项目时**第一个读这个文件**。每次离开前必须更新「上次离开时停在哪」和「下次回来要做的」。
 
-**last update**: 2026-06-19（Phase 2 文档完成，准备开 M1'）
+**last update**: 2026-06-19（M1' Wi-Fi PoC 实测通过 ✅）
 
 ## 🎯 当前阶段
 
 正在做：**v0.3 — Wi-Fi 热点改造**
-- v0.3 整体进度：~35%
-- M1 进度：**部分通过**（指纹 demo ✅，AOAP 在 Win 死路一条 ❌，Phase 1 commit `a484b32` 已落）
-- ADR-002 + 设计 + roadmap：✅ 完成（Phase 2）
-- 下个里程碑：**M1'**（Wi-Fi hotspot PoC，0.5 天）
+- v0.3 整体进度：~50%
+- M1' 进度：**✅ 完成**（小米 14 Pro + Win11 实测 ping/pong 跑通）
+- 下个里程碑：**M2'**（加密通道，~1 天）
 
 ## 📍 上次离开时停在哪
 
-- **里程碑**：Phase 2 文档完成（ADR-002 + design + roadmap），M1' 未开工
-- **代码状态**：Phase 1 已 commit；Phase 2 仅文档（无代码改动），待 commit
-- **测试状态**：M1 已验证 ✅ 指纹通 / ❌ AOAP 不通；M1' 未开始
-- **git working tree**：未 commit Phase 2（3 个新文档 + PROGRESS/TODO/MEMORY 更新）
+- **里程碑**：M1' 实测通过 — Win11 Chrome 通过 PC server-side proxy 拉手机 Ktor `/ping` 1 秒内回 pong
+- **代码状态**：
+  - APK：`HotspotServerService` (Ktor CIO :9876) + `HotspotPairActivity` (UI/状态/IP 列表)
+  - PC：`src/lan-server.js` (probe + 错误码) + `/api/lan/probe` 路由 + `lan-pair.js` (浏览器按钮)
+  - 关键 fix：API 34+ 必须加 `CHANGE_WIFI_STATE` 才能启 `connectedDevice` 前台服务
+- **测试状态**：
+  - ✅ phone server 启停稳定
+  - ✅ PC 切 Wi-Fi 加入手机热点后 probe 通
+  - ✅ pong 含 app/ver/time/uptime，PC 端时钟漂移可视
+- **git working tree**：M1' 完成代码 + 文档同步待 commit
 
 ## ⏭️ 下次回来要做的
 
-**Phase 3：M1' Wi-Fi PoC（~0.5 天）**
+**M2' — 加密通道（~1 天，详见 `docs/wifi-hotspot-roadmap.md` §M2'）**
 
-实施步骤详见 `docs/wifi-hotspot-roadmap.md` §M1'。摘要：
-1. APK：`app/build.gradle.kts` 加 Ktor 依赖（先跑 `/install-deps` 询问用户）
-2. APK：`HotspotServerService.kt` 前台服务 + Ktor :9876
-3. APK：`HotspotPairActivity.kt` 状态 UI
-4. APK：manifest 加 FOREGROUND_SERVICE / POST_NOTIFICATIONS / ACCESS_NETWORK_STATE
-5. PC：`src/lan-server.js` + `/api/lan/probe`
-6. PC：`src/public/js/lan-pair.js` + phone.html 入口
-7. 联调：你开热点 → PC 切 Wi-Fi → ping 通
+实施前必做：
+- [ ] 跑 `/install-deps` 询问 npm `ws` 包安装方式
+- [ ] 跑 `/install-deps` 询问手机端 Tink 依赖安装方式
+- [ ] 决定：WebSocket 路由是否用 wss（自签证书）还是先 ws 裸跑（安全靠 AES-GCM 不靠 TLS）
 
-**实施前必做：**
-- [ ] 跑 `/install-deps` 询问用户：手机端 Ktor 依赖如何装
-- [ ] 询问：是否要现在就动 v0.4+ Backlog 的 USB tethering 路径作为兜底，还是 v0.3 仅做 Wi-Fi 热点
+代码大致：
+1. APK：加 `io.ktor:ktor-server-websockets` + `tink-android` 依赖
+2. APK：`Crypto.kt` (X25519 + HKDF + AES-GCM) + `HotspotServerService` 加 `WEBSOCKET /socket` 路由
+3. PC：`src/public/js/secure.js` (WebCrypto subtle 同算法栈)
+4. PC：`src/lan-server.js` 加 WebSocket client（npm `ws`）
+5. 联调：PC 发 PING 加密帧 → 手机回 PONG，往返 < 50ms
 
 ## 🚧 阻塞 / 待解决
 
@@ -51,10 +55,14 @@
 - 2026-06-19: **M1 部分通过：指纹 demo OK，AOAP 在 Win 死路一条**
   - libusb / Chrome WebUSB 都被 Win MTP 驱动锁 vendor 控制传输
   - 用户拒绝 Zadig（会丢 MTP 文件传输）
-- 2026-06-19: **决策切 Wi-Fi 热点（ADR-002 即将写）**
+- 2026-06-19: **决策切 Wi-Fi 热点（ADR-002）**
   - 用户选 B 路线（手机做热点，PC 加入热点）
   - 复用 M2 加密协议设计，传输层从 USB bulk 换 TCP/HTTP
   - AOAP 代码全部 deprecated 不删，Linux/Mac 仍可走
+- 2026-06-19: **M1' Wi-Fi PoC 实测通过**
+  - APK 用 Ktor CIO 起 server :9876，PC 通过 `/api/lan/probe` 代理拉 `/ping`
+  - 关键坑：API 34+ FGS connectedDevice 需 CHANGE_WIFI_STATE 兜底权限
+  - ping/pong 跨 Wi-Fi 热点 LAN 往返 ~50ms，AOAP 死路彻底绕开
 
 ## 🔗 关键文档跳转
 

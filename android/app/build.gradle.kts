@@ -1,6 +1,7 @@
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
+    id("org.jetbrains.kotlin.plugin.serialization") version "2.0.21"
 }
 
 android {
@@ -53,4 +54,14 @@ dependencies {
     // Pre-empted from M3 (CHALLENGE/RESPONSE flow) so we hit OEM-specific landmines
     // (Xiaomi MIUI fingerprint quirks) before they block protocol work.
     implementation("androidx.biometric:biometric:1.2.0-alpha05")
+
+    // M1' (Wi-Fi hotspot route, ADR-002) — Ktor as on-phone HTTP server.
+    // CIO engine instead of Netty: smaller APK (~1.5MB vs 3MB), no servlet
+    // baggage, simpler DEX config. content-negotiation + kotlinx-json for
+    // typed JSON request/response models.
+    implementation("io.ktor:ktor-server-core:2.3.13")
+    implementation("io.ktor:ktor-server-cio:2.3.13")
+    implementation("io.ktor:ktor-server-content-negotiation:2.3.13")
+    implementation("io.ktor:ktor-serialization-kotlinx-json:2.3.13")
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.3")
 }

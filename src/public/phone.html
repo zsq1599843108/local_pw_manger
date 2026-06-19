@@ -77,8 +77,29 @@
 
     <hr style="margin:25px 0; border:0; border-top:1px solid rgba(255,255,255,0.1);">
 
+    <!--
+      v0.3 M1' primary route (ADR-002): Wi-Fi hotspot pairing.
+      Replaces the AOAP path on Windows where MTP driver blocks vendor xfer.
+    -->
+    <button id="lan-btn" onclick="startLanProbe()" style="background:linear-gradient(135deg,#4ade80 0%,#16a34a 100%);">
+      Pair via Wi-Fi (v0.3 M1' PoC)
+    </button>
+    <div style="margin-top:10px; display:flex; gap:8px; align-items:center; justify-content:center;">
+      <label style="font-size:12px; color:#aaa;">host</label>
+      <input id="lan-host" value="192.168.43.1" style="width:130px; padding:4px; border-radius:4px; border:1px solid #555; background:rgba(255,255,255,0.08); color:#fff; font-family:monospace;">
+      <label style="font-size:12px; color:#aaa;">:port</label>
+      <input id="lan-port" value="9876" style="width:60px; padding:4px; border-radius:4px; border:1px solid #555; background:rgba(255,255,255,0.08); color:#fff; font-family:monospace;">
+    </div>
+    <pre id="lan-log" style="
+      text-align:left; font-size:12px; color:#bfb;
+      background:rgba(0,0,0,0.3); padding:10px; border-radius:6px;
+      margin-top:15px; max-height:200px; overflow:auto;
+      display:none; font-family:Consolas,Monaco,monospace; white-space:pre-wrap;"></pre>
+
+    <hr style="margin:25px 0; border:0; border-top:1px solid rgba(255,255,255,0.1);">
+
     <button id="aoap-btn" onclick="startAoapPairing()" style="background:linear-gradient(135deg,#ff8c4a 0%,#ff6f1e 100%);">
-      Pair via USB (AOAP — v0.3 PoC)
+      Pair via USB (AOAP — DEPRECATED on Win)
     </button>
     <pre id="aoap-log" style="
       text-align:left; font-size:12px; color:#9cc;
@@ -94,7 +115,16 @@
         <li>Click "Start Verification" on this page</li>
         <li>Enter the 4-digit code on your computer</li>
       </ol>
-      <h3 style="margin-top:15px;">AOAP Mode (v0.3 PoC):</h3>
+      <h3 style="margin-top:15px;">Wi-Fi Mode (v0.3 M1' PoC, primary route):</h3>
+      <ol>
+        <li>Install <code>android/app/build/outputs/apk/debug/app-debug.apk</code> on phone</li>
+        <li>Open PassMan on phone → tap "Start server"</li>
+        <li>Open phone's <strong>Wi-Fi hotspot</strong> in system settings (Settings → Hotspot)</li>
+        <li>On <strong>this PC</strong>, switch Wi-Fi to the phone's hotspot (PC will lose its main Wi-Fi briefly)</li>
+        <li>Click "Pair via Wi-Fi" — should see <code>pong</code> within a second</li>
+      </ol>
+
+      <h3 style="margin-top:15px;">AOAP Mode (DEPRECATED on Windows):</h3>
       <ol>
         <li>Install <code>android/app/build/outputs/apk/debug/app-debug.apk</code> on phone</li>
         <li>Plug phone via USB (no USB debug needed)</li>
@@ -106,6 +136,7 @@
   </div>
 
   <script type="module" src="/js/aoap-page.js"></script>
+  <script src="/js/lan-pair.js"></script>
   <script>
     let usbDevice = null;
     let currentToken = null;

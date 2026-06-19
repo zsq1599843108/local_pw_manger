@@ -4,7 +4,7 @@
 
 ## 🔥 In Progress
 
-- [ ] M1' — Wi-Fi PoC：手机端 Ktor server + PC 端 ping/pong（详见 `docs/wifi-hotspot-roadmap.md` §M1'）
+- [ ] M2' — 加密通道 (X25519 + HKDF + AES-GCM over WebSocket，详见 `docs/wifi-hotspot-roadmap.md` §M2'，~1 天)
 
 ## ⏭️ Next（v0.3 — Wi-Fi 热点改造，覆盖 AOAP）
 
@@ -14,15 +14,15 @@
 - [x] `docs/wifi-hotspot-roadmap.md` — M1'~M5' 拆解
 - [x] 更新 `MEMORY.md` 文件地图
 
-### M1' — Wi-Fi PoC：ping/pong（~0.5~1 天）
-- [ ] APK：app/build.gradle 加 `io.ktor:ktor-server-netty:2.3.x`
-- [ ] APK：`HotspotServerService.kt` — 前台服务，Ktor server 端口 9876，路由 `GET /ping → "pong"`
-- [ ] APK：`HotspotPairActivity.kt` — 显示 SSID/密码/PIN，启动/停止热点开关
-- [ ] APK：manifest 加 `FOREGROUND_SERVICE`、`POST_NOTIFICATIONS`、（可选）`CHANGE_NETWORK_STATE`
-- [ ] PC：`phone.html` 加「Wi-Fi 配对」入口
-- [ ] PC：`src/public/js/lan-pair.js` 浏览器端逻辑
-- [ ] PC：`src/lan-server.js` + server.js 加 `/api/lan/probe` 端点
-- [ ] 联调：你开热点 → PC 切 Wi-Fi → ping 通
+### M1' — Wi-Fi PoC：ping/pong（~0.5 天） ✅ 完成
+- [x] APK：app/build.gradle 加 Ktor (CIO + content-negotiation + json) + kotlinx-serialization plugin
+- [x] APK：`HotspotServerService.kt` — 前台服务 + Ktor :9876，路由 GET /ping → JSON
+- [x] APK：`HotspotPairActivity.kt` — Start/Stop + 实时 IP 列表 + 状态轮询
+- [x] APK：manifest 加 FOREGROUND_SERVICE / FOREGROUND_SERVICE_CONNECTED_DEVICE / POST_NOTIFICATIONS / **CHANGE_WIFI_STATE** (FGS gate) / WAKE_LOCK
+- [x] PC：`src/lan-server.js` — probe(host,port) + `/api/lan/probe` 路由
+- [x] PC：`src/public/js/lan-pair.js` — 浏览器按钮 + 错误码映射
+- [x] PC：phone.html 绿色「Pair via Wi-Fi」入口
+- [x] 联调：小米 14 Pro + Win11 实测 ping/pong 通
 
 ### M2' — 加密通道（沿用原 M2 设计 ~1 天）
 - [ ] PC: `secure.js` X25519 + HKDF + AES-GCM
@@ -73,3 +73,9 @@
   - server 端 `src/aoap-server.js` libusb 握手（已 deprecated）
   - **AOAP 在 Windows MTP 模式下不可行复盘**：`docs/troubleshooting-windows.md`
 - [x] 2026-06-19 ADR-002 决策：转向 Wi-Fi 热点路线（B 方案）
+- [x] 2026-06-19 **M1' Wi-Fi PoC 实测通过**：
+  - 手机端 Ktor CIO server (`HotspotServerService` :9876) 启停稳定
+  - 前端 UI (`HotspotPairActivity`) 显示实时 IP 列表 + 服务状态
+  - PC 端 `lan-server.js` 通过 `/api/lan/probe` 代理 fetch（绕开浏览器 mixed-content / CORS）
+  - 关键坑：API 34+ FGS `connectedDevice` 类型必须搭配 CHANGE_WIFI_STATE 等权限之一
+  - 实测：小米 14 Pro + Win11 Chrome ping/pong < 1s 完成

@@ -3,6 +3,7 @@ const path = require('path');
 const { initDatabase } = require('./db');
 const crypto = require('./crypto');
 const { handshakeHandler: aoapHandshake } = require('./aoap-server');
+const { probeHandler: lanProbe } = require('./lan-server');
 
 const app = express();
 const PORT = 3000;
@@ -15,7 +16,11 @@ const db = initDatabase();
 
 // AOAP server-side handshake (v0.3 M1.5) — Windows workaround for Chrome's
 // inability to open() MTP-mode phones. See src/aoap-server.js for details.
+// ⚠️ DEPRECATED on Win11 (MTP locks vendor xfer); kept for Linux/macOS.
 app.post('/api/aoap/handshake', aoapHandshake);
+
+// Wi-Fi-hotspot pairing (v0.3 M1', ADR-002) — the supported route.
+app.post('/api/lan/probe', lanProbe);
 
 
 app.post('/api/auth/setup', (req, res) => {

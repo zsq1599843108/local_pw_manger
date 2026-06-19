@@ -26,16 +26,24 @@
 | ⚠️ DEPRECATED | `src/aoap-server.js` | Node 端 libusb 握手 + `/api/aoap/handshake` |
 | 🔨 | `src/public/js/frame.js` | TLV 帧编解码（M2'/M3' 沿用） |
 | 🔨 | `src/public/js/secure.js` | X25519 + HKDF + AES-GCM（M2' 沿用） |
-| 🔨 | `src/public/js/lan-pair.js` | **Wi-Fi 热点配对 UI（M1' 新增）** |
-| 🔨 | `src/lan-server.js` | **PC 拉手机 Ktor server（M1' 新增）** |
+
+### v0.3 现行（Wi-Fi 热点路线，M1' GA）
+| 重要度 | 文件 | 角色 |
+|--------|------|------|
+| ⭐⭐⭐ | `src/lan-server.js` | PC 端代理 fetch 手机 Ktor server，导出 probe + `/api/lan/probe` |
+| ⭐⭐⭐ | `src/public/js/lan-pair.js` | 浏览器「Pair via Wi-Fi」按钮逻辑 |
+| 🔨 | (待 M2') `src/public/js/lan-secure.js` | WebSocket + X25519 + AES-GCM |
+| 🔨 | (待 M2') `src/lan-ws-client.js` | Node ws client 包 |
 
 ### Android 子项目（v0.3-m1 起，仓库内 `android/`）
 | 重要度 | 文件 | 角色 |
 |--------|------|------|
-| ⭐⭐⭐ | `android/app/build.gradle.kts` | Kotlin/AGP 8.11.1 配置，含 biometric / appcompat |
-| ⭐⭐⭐ | `android/app/src/main/AndroidManifest.xml` | activities + accessory_filter meta |
-| ⭐⭐⭐ | `android/app/src/main/java/com/passman/pair/BiometricDemoActivity.kt` | **指纹认证 demo（M1 实测通过）** |
-| ⚠️ | `android/app/src/main/java/com/passman/pair/UsbAccessoryActivity.kt` | AOAP USB handler（Win 不可用，DEPRECATED） |
+| ⭐⭐⭐ | `android/app/build.gradle.kts` | Kotlin/AGP 8.11.1 配置，含 biometric / appcompat / **Ktor 2.3.13 + kotlinx-serialization** |
+| ⭐⭐⭐ | `android/app/src/main/AndroidManifest.xml` | activities + service + accessory_filter meta + FGS 权限链（**含 CHANGE_WIFI_STATE，API 34+ FGS gate**） |
+| ⭐⭐⭐ | `.../HotspotPairActivity.kt` | **M1' 主 Launcher**：Start/Stop server + 实时 IP 列表 |
+| ⭐⭐⭐ | `.../HotspotServerService.kt` | **M1' Ktor 前台服务**：监听 :9876，路由 `/ping` |
+| ⭐⭐ | `.../BiometricDemoActivity.kt` | 指纹认证 demo（M1 实测通过） |
+| ⚠️ | `.../UsbAccessoryActivity.kt` | AOAP USB handler（Win 不可用，DEPRECATED） |
 | ⭐⭐ | `android/app/src/main/res/xml/accessory_filter.xml` | AOAP manufacturer/model 匹配（DEPRECATED 但留给 Linux/Mac） |
 | ⭐ | `android/settings.gradle.kts` | 含国内镜像（aliyun + 华为云） |
 | ⭐ | `android/gradle.properties` | JDK 17 home + worker=1（Win Gradle 8.14 死锁规避） |

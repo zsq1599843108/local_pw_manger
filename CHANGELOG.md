@@ -4,6 +4,24 @@
 
 ## [Unreleased] — v0.3-dev (Wi-Fi 热点改造，前身 AOAP 已 deprecated)
 
+### Added (2026-06-19, M1' Wi-Fi PoC 实测通过 ✅)
+- 手机端：`HotspotServerService.kt` — 前台服务跑 Ktor CIO server，监听 `0.0.0.0:9876`，路由 `GET /ping → JSON{app,ver,time,uptimeMs}`
+- 手机端：`HotspotPairActivity.kt` — Start/Stop 按钮 + 实时 IPv4 列表 + 1Hz 状态轮询，跳系统 tethering 设置入口
+- 手机端：Ktor 2.3.13 (CIO + content-negotiation + json) + kotlinx-serialization-json 1.6.3
+- 手机端：manifest 加 INTERNET / FOREGROUND_SERVICE / FOREGROUND_SERVICE_CONNECTED_DEVICE / **CHANGE_WIFI_STATE** (API 34+ FGS gate) / POST_NOTIFICATIONS / ACCESS_NETWORK_STATE / WAKE_LOCK
+- PC 端：`src/lan-server.js` — `probe(host,port)` 异步函数 + `/api/lan/probe` Express 路由（代理 fetch 绕开浏览器 mixed-content）
+- PC 端：`src/public/js/lan-pair.js` — 绿色「Pair via Wi-Fi」按钮 + 错误码映射 + 性能计时
+- PC 端：phone.html 加 Wi-Fi 配对入口 + host/port 输入框
+
+### Verified (2026-06-19, 小米 14 Pro + Win11 实测)
+- ✅ Ktor server 在前台服务里跑 1+ 分钟稳定
+- ✅ PC 切到手机热点后通过 192.168.43.1:9876 拉到 ping/pong
+- ✅ 端到端往返 < 1 秒（含 server-side proxy 跳）
+- ✅ 时钟漂移可视化（PC 与手机系统时间差）
+
+### Fixed (2026-06-19)
+- API 34+ 启动 `connectedDevice` 类型前台服务报 `SecurityException`：必须搭 `CHANGE_WIFI_STATE` / `BLUETOOTH_*` 等其中一项 normal-protection 权限。已加 CHANGE_WIFI_STATE 满足 gate。
+
 ### Added (2026-06-19, M1 部分通过)
 - PC 端 `src/public/js/aoap.js` — 完整 AOAP 握手实现（pairOverAoap / getProtocol / sendString / startAccessory）⚠️ DEPRECATED
 - PC 端 `src/aoap-server.js` — Node 端 libusb 握手 + `/api/aoap/handshake` 路由（绕开 Chrome WebUSB 在 Win 的 access denied）⚠️ DEPRECATED

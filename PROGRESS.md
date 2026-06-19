@@ -2,58 +2,74 @@
 
 > Claude 进入项目时**第一个读这个文件**。每次离开前必须更新「上次离开时停在哪」和「下次回来要做的」。
 
-**last update**: 2026-06-18 (晚)
+**last update**: 2026-06-19（M1 收尾，AOAP 在 Win 上死路一条，已转 ADR-002）
 
 ## 🎯 当前阶段
 
-正在做：**v0.3 — AOAP 手机配对改造**（设计完成 + 阻塞项已澄清，可直接开 M1）
-v0.2 进度：100%（核心功能完整）
-v0.3 进度：12%（设计 ✅ + roadmap ✅ + UTF-8 阻塞项澄清 ✅，未开工 M1）
+正在做：**v0.3 — 配对协议大改**
+- v0.3 整体进度：~30%
+- M1 进度：**部分通过**（指纹 demo ✅，AOAP 协议在 Win11 上被 MTP 驱动锁死 ❌）
+- ADR-002 决策：**抛弃 AOAP，改走「手机 Wi-Fi 热点 + LAN 加密通道」**（用户选 B 路线）
+- 下个里程碑：**M1'**（Wi-Fi hotspot PoC，0.5~1 天）
 
 ## 📍 上次离开时停在哪
 
-- **里程碑**：完成 v0.3 设计文档（ADR-001 + design + roadmap）+ 澄清 UTF-8 阻塞项
-- **代码状态**：v0.2 代码无变更；新增 `scripts/test-utf8.js` 自动化测试
-- **测试状态**：UTF-8 round-trip 7/7 通过（含简繁中日韩、emoji、4 字节 CJK 扩展）
-- **关键澄清**：之前标记的「中文乱码 bug」是**测试假阳性** — Windows GBK 控制台显示 UTF-8 字节本来就乱，DB/HTTP/HTML 三层全程 UTF-8 正确，浏览器实际显示无问题。详见 `CHANGELOG.md` v0.3 Unreleased 段
-- **git working tree clean**
+- **里程碑**：M1 收尾 commit。AOAP 实证不通后留 deprecated 不删，转 ADR-002 设计中
+- **代码状态**：
+  - PC 端：`src/public/js/aoap.js`、`aoap-page.js`、`aoap-server.js` 全部加 deprecated 头注释
+  - APK 端：`UsbAccessoryActivity.kt` 加 deprecated 头；`BiometricDemoActivity.kt` 已实测可用
+  - 手机端 APK：`com.passman.pair v0.3-m1`，3.6MB，含指纹 demo + AOAP USB handler
+  - server 端：`src/aoap-server.js` 已挂在 `/api/aoap/handshake`（Linux/Mac 仍可用）
+- **测试状态**：
+  - ✅ 指纹 BIOMETRIC_STRONG 在小米 14 Pro 上通过
+  - ✅ libusb 在 Win11 能 open 小米 + 读 manufacturerName
+  - ❌ vendor control transfer (req=51) 报 `invalid state`，MTP 驱动锁死
+  - ❌ Chrome WebUSB 报 `Access denied`，同样原因
+- **关键澄清**：Windows AOAP 路线**唯一软件层解法是 Zadig 装 WinUSB**，但代价是丢 MTP 文件传输 → 用户拒绝 → 转向 Wi-Fi 热点
+- **git working tree**：M1 commit 待推
 
 ## ⏭️ 下次回来要做的
 
-**直接开 M1（无阻塞）：**
-1. M1 — AOAP 握手 PoC（0.5 天）：
-   - 新建 `src/public/js/aoap.js`（getProtocol / sendString / startAccessory）
-   - APK 加最小 `UsbAccessoryActivity` 回显
-   - 真机插线 → 弹「打开 PassMan?」→ console echo 跑通
+**Phase 2（先做，~30 min）：写 ADR-002 + 新 roadmap**
+1. `docs/adr-002-wifi-hotspot.md` — 决策 + AOAP 的 Win 阻塞证据 + 选 B 路线的理由
+2. `docs/wifi-hotspot-design.md` — 协议（手机做 Ktor server、PC 当客户端、PIN 配对、X25519 + AES-GCM 加密通道）
+3. `docs/wifi-hotspot-roadmap.md` — M1'~M5' 拆分（M1' = ping/pong PoC）
+4. 更新 `MEMORY.md` 文件地图（标 deprecated 文件 + 新增文件）
 
-**M2~M5 详见 `docs/aoap-roadmap.md`**
-
-**实施前必做：**
-- [ ] 跑 `/install-deps` 确认手机端新依赖（Tink + EncryptedSharedPreferences）的安装方式
-- [ ] 准备至少一台真机（建议小米/红米，AOAP 兼容性最好）
+**Phase 3：M1' Wi-Fi PoC（~2-3 hour）**
+1. APK 加 Ktor 依赖 + `HotspotServerService.kt` 前台服务（端口 9876，监听 `/ping`）
+2. APK 加 `HotspotPairActivity.kt`：屏幕显示 SSID/密码/IP/PIN
+3. PC 端 `src/public/js/lan-pair.js` + `src/lan-server.js`（Node 拉 `http://192.168.43.1:9876/ping`）
+4. 联调：你开热点 → PC 切 Wi-Fi 加入 → ping 通
 
 ## 🚧 阻塞 / 待解决
 
 - [x] 确定技术栈（Node.js + Express + SQLite）
-- [x] 选定手机配对协议（**AOAP**，2026-06-18）
-- [x] ~~中文乱码 bug~~ — **2026-06-18 验证为测试假阳性**，无需修复
-- [ ] 需要采购/借测：除小米外另 2 台不同品牌手机做兼容性测试
+- [x] 选定手机配对协议（**AOAP**，2026-06-18）→ ❌ Win 上不可行
+- [x] **新协议选定（Wi-Fi hotspot，2026-06-19）**
+- [ ] 准备 iPhone 测兼容性（v0.4+ 范畴）
 
 ## 📌 决策记录
 
 - 2026-06-16: 项目初始化
-- 2026-06-18: v0.2 全部 UI 和代码改为英文，添加导入导出功能，实现 WebUSB + ADB 手机验证器，APK 构建链跑通
-- 2026-06-18: **决策切换**：手机配对从 WebUSB+ADB 改为 AOAP（详见 ADR-001）
-  - 理由：用户要求物理 USB 但不开调试模式
-  - 代价：开发周期 5~6 天（已认可）
-- 2026-06-18: **阻塞项澄清**：中文乱码不是 bug，验证用例 `scripts/test-utf8.js` 7/7 通过
-  - 教训：以后用 PowerShell/curl 测中文必须看字节而非控制台显示
+- 2026-06-18: v0.2 全部 UI 和代码改为英文，添加导入导出，实现 WebUSB + ADB 手机验证器
+- 2026-06-18: 决策切 AOAP（ADR-001）
+- 2026-06-19: **M1 部分通过：指纹 demo OK，AOAP 在 Win 死路一条**
+  - libusb / Chrome WebUSB 都被 Win MTP 驱动锁 vendor 控制传输
+  - 用户拒绝 Zadig（会丢 MTP 文件传输）
+- 2026-06-19: **决策切 Wi-Fi 热点（ADR-002 即将写）**
+  - 用户选 B 路线（手机做热点，PC 加入热点）
+  - 复用 M2 加密协议设计，传输层从 USB bulk 换 TCP/HTTP
+  - AOAP 代码全部 deprecated 不删，Linux/Mac 仍可走
 
 ## 🔗 关键文档跳转
 
-- 协议设计 → `docs/aoap-design.md`
-- 任务拆解 → `docs/aoap-roadmap.md`
-- 选型理由 → `docs/adr-001-aoap.md`
+- AOAP 设计（已 deprecated 留作历史）→ `docs/aoap-design.md`
+- AOAP 路线图（已 deprecated）→ `docs/aoap-roadmap.md`
+- ADR-001 AOAP 选型（已 deprecated）→ `docs/adr-001-aoap.md`
+- **Win AOAP 阻塞复盘** → `docs/troubleshooting-windows.md`
+- **新决策（待写）** → `docs/adr-002-wifi-hotspot.md`
+- **新设计（待写）** → `docs/wifi-hotspot-design.md`
+- **新路线图（待写）** → `docs/wifi-hotspot-roadmap.md`
 - 文件地图 → `MEMORY.md`
 - 任务清单 → `TODO.md`
-- UTF-8 验证 → `scripts/test-utf8.js`（`node src/server.js` 起服后跑）

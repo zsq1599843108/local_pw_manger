@@ -18,13 +18,27 @@
 | ⭐⭐ | `src/public/phone.html` | 手机验证器/配对页（v0.3 重写为 AOAP） |
 | ⭐ | `src/public/css/style.css` | 全局样式 |
 
-### v0.3 新增（AOAP 改造期，待实施）
+### v0.3 新增（AOAP 改造期，已 deprecated 不删）
 | 计划 | 文件 | 角色 |
 |--------|------|------|
-| 🔨 | `src/public/js/aoap.js` | AOAP 握手 + WebUSB |
-| 🔨 | `src/public/js/frame.js` | TLV 帧编解码 |
-| 🔨 | `src/public/js/secure.js` | X25519 + HKDF + AES-GCM |
-| 🔨 | `src/public/js/pair.js` | 配对状态机 |
+| ⚠️ DEPRECATED | `src/public/js/aoap.js` | AOAP 握手 + WebUSB（仅 Linux/Mac 可用，Win 被 MTP 驱动锁） |
+| ⚠️ DEPRECATED | `src/public/js/aoap-page.js` | 浏览器 AOAP UI |
+| ⚠️ DEPRECATED | `src/aoap-server.js` | Node 端 libusb 握手 + `/api/aoap/handshake` |
+| 🔨 | `src/public/js/frame.js` | TLV 帧编解码（M2'/M3' 沿用） |
+| 🔨 | `src/public/js/secure.js` | X25519 + HKDF + AES-GCM（M2' 沿用） |
+| 🔨 | `src/public/js/lan-pair.js` | **Wi-Fi 热点配对 UI（M1' 新增）** |
+| 🔨 | `src/lan-server.js` | **PC 拉手机 Ktor server（M1' 新增）** |
+
+### Android 子项目（v0.3-m1 起，仓库内 `android/`）
+| 重要度 | 文件 | 角色 |
+|--------|------|------|
+| ⭐⭐⭐ | `android/app/build.gradle.kts` | Kotlin/AGP 8.11.1 配置，含 biometric / appcompat |
+| ⭐⭐⭐ | `android/app/src/main/AndroidManifest.xml` | activities + accessory_filter meta |
+| ⭐⭐⭐ | `android/app/src/main/java/com/passman/pair/BiometricDemoActivity.kt` | **指纹认证 demo（M1 实测通过）** |
+| ⚠️ | `android/app/src/main/java/com/passman/pair/UsbAccessoryActivity.kt` | AOAP USB handler（Win 不可用，DEPRECATED） |
+| ⭐⭐ | `android/app/src/main/res/xml/accessory_filter.xml` | AOAP manufacturer/model 匹配（DEPRECATED 但留给 Linux/Mac） |
+| ⭐ | `android/settings.gradle.kts` | 含国内镜像（aliyun + 华为云） |
+| ⭐ | `android/gradle.properties` | JDK 17 home + worker=1（Win Gradle 8.14 死锁规避） |
 
 ## 🚫 不要碰
 
@@ -34,9 +48,16 @@
 
 ## 📚 设计文档索引
 
-- [AOAP 设计文档](docs/aoap-design.md) — v0.3 手机 USB 配对的协议+架构+流程图（开发期主参考）
-- [AOAP 实施路线图](docs/aoap-roadmap.md) — 5 个里程碑任务拆解，每天对照执行
-- [ADR-001：选用 AOAP](docs/adr-001-aoap.md) — 为什么选 AOAP 而非 USB 网络共享/QR/BLE
+### 现行（Wi-Fi 热点路线）
+- 待写：`docs/adr-002-wifi-hotspot.md` — 选型决策（B 路线，2026-06-19）
+- 待写：`docs/wifi-hotspot-design.md` — 协议 + 流程图
+- 待写：`docs/wifi-hotspot-roadmap.md` — M1'~M5'
+
+### 已 deprecated（保留作历史 + Linux/Mac 备选）
+- [AOAP 设计文档](docs/aoap-design.md) — v0.3 第一版（USB AOAP）
+- [AOAP 实施路线图](docs/aoap-roadmap.md) — 5 里程碑（M1 跑了一半）
+- [ADR-001：选用 AOAP](docs/adr-001-aoap.md) — 第一次选型理由
+- [Win AOAP 阻塞复盘](docs/troubleshooting-windows.md) — MTP 驱动锁死 vendor 控制传输
 
 ## ⚠️ 已知遗留问题
 

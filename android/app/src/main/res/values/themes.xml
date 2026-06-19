@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- AppCompat-based theme so BiometricDemoActivity (AppCompatActivity) can inflate. -->
+    <style name="Theme.PassMan" parent="Theme.AppCompat.Light.NoActionBar" />
+</resources>

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Must match the strings PC sends via AOAP SEND_STRING (req=52). Source of truth:
+  src/public/js/aoap.js → ACCESSORY_IDENTITY.
+
+  Android matches all three attributes (manufacturer + model + version) before
+  offering this APK as the handler. Mismatch = no system dialog appears.
+-->
+<resources>
+    <usb-accessory
+        manufacturer="PassMan"
+        model="PassMan-Pair"
+        version="1.0" />
+</resources>

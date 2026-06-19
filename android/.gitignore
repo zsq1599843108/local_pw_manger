@@ -1,0 +1,16 @@
+# Build outputs
+/.gradle/
+/build/
+/app/build/
+/captures/
+/.cxx/
+
+# IDE
+/.idea/
+/*.iml
+/local.properties
+
+# Signing — never commit
+*.jks
+*.keystore
+key.properties

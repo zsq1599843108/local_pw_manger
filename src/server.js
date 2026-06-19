@@ -2,6 +2,7 @@ const express = require('express');
 const path = require('path');
 const { initDatabase } = require('./db');
 const crypto = require('./crypto');
+const { handshakeHandler: aoapHandshake } = require('./aoap-server');
 
 const app = express();
 const PORT = 3000;
@@ -11,6 +12,11 @@ app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
 const db = initDatabase();
+
+// AOAP server-side handshake (v0.3 M1.5) — Windows workaround for Chrome's
+// inability to open() MTP-mode phones. See src/aoap-server.js for details.
+app.post('/api/aoap/handshake', aoapHandshake);
+
 
 app.post('/api/auth/setup', (req, res) => {
   const { masterPassword } = req.body;

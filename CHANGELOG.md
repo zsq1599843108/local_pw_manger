@@ -2,21 +2,36 @@
 
 按 [Keep a Changelog](https://keepachangelog.com/) 风格。新条目加在最上面。
 
-## [Unreleased] — v0.3-dev (AOAP 改造)
+## [Unreleased] — v0.3-dev (Wi-Fi 热点改造，前身 AOAP 已 deprecated)
 
-### Planned
-- 手机 USB 配对协议从 WebUSB+ADB 切换到 AOAP（不再需要 USB 调试模式）
-- X25519 + HKDF + AES-256-GCM 端到端加密通道
-- TLV 帧协议 + 设备指纹持久化配对
-- `paired_devices` 表 + 主密码挑战流程
-- 完整密码库 USB 同步（v0.3 全量；v0.4+ 增量）
+### Added (2026-06-19, M1 部分通过)
+- PC 端 `src/public/js/aoap.js` — 完整 AOAP 握手实现（pairOverAoap / getProtocol / sendString / startAccessory）⚠️ DEPRECATED
+- PC 端 `src/aoap-server.js` — Node 端 libusb 握手 + `/api/aoap/handshake` 路由（绕开 Chrome WebUSB 在 Win 的 access denied）⚠️ DEPRECATED
+- PC 端 `src/public/js/aoap-page.js` — 浏览器配对 UI 接 server-side handshake ⚠️ DEPRECATED
+- 仓库新增 `android/` 子项目：Gradle 8.14.3 + AGP 8.11.1 + Kotlin 2.0.21，含国内 Maven 镜像
+- 手机端 `UsbAccessoryActivity.kt` — USB_ACCESSORY_ATTACHED handler + echo loop ⚠️ DEPRECATED
+- 手机端 **`BiometricDemoActivity.kt` — 指纹认证独立 demo Activity**，BiometricPrompt 双模式（STRONG / DEVICE_CREDENTIAL fallback），实测通过
+- npm 依赖：`usb@3.0.0`（libusb 绑定，prebuild 二进制无需编译）
+- Android 依赖：`androidx.biometric:1.2.0-alpha05`、`androidx.appcompat:1.7.0`、`androidx.core-ktx:1.13.1`
+
+### Verified (2026-06-19, 实测)
+- ✅ 指纹 BIOMETRIC_STRONG 在小米 14 Pro 上通过
+- ✅ libusb 在 Win11 能 open 小米 + 读 manufacturerName
+- ❌ AOAP vendor control transfer (req=51) 报 `invalid state`，Win MTP 驱动锁死
+- ❌ Chrome WebUSB 报 `Access denied`，同样原因
+- 结论：**Win 上 AOAP 唯一软件层解法是 Zadig 装 WinUSB**，但代价是丢 MTP
+
+### Decision (2026-06-19, ADR-002)
+- **抛弃 AOAP**（仅 Linux/Mac 路径保留 deprecated 代码）
+- **转向「手机 Wi-Fi 热点 + LAN 加密通道」**：
+  - 手机做 Ktor server，PC 加入手机热点后跑 HTTP/WebSocket
+  - M2 加密协议（X25519 + AES-GCM）100% 沿用，传输层从 USB bulk 换 TCP
+  - 物理钥匙语义：~10m 热点范围 + 公钥指纹 TOFU + BiometricPrompt 挑战
 
 ### Documentation
-- 新增 `docs/aoap-design.md` — AOAP 协议设计 + 架构图
-- 新增 `docs/aoap-roadmap.md` — 5 里程碑实施路线
-- 新增 `docs/adr-001-aoap.md` — 配对方案选型决策
-- 重写 `MEMORY.md` 文件地图（修正 v0.2 后的实际结构）
-- 重写 `TODO.md` 按 M1~M5 拆解
+- 新增 `docs/troubleshooting-windows.md` — AOAP Win 阻塞复盘 + Zadig 操作手册（虽不采用）
+- AOAP 系列文档保留作历史：`aoap-design.md` / `aoap-roadmap.md` / `adr-001-aoap.md`
+- 待写：`adr-002-wifi-hotspot.md` / `wifi-hotspot-design.md` / `wifi-hotspot-roadmap.md`
 
 ### Tested
 - 新增 `scripts/test-utf8.js` UTF-8 round-trip 自动化测试 — 7/7 通过
@@ -24,7 +39,10 @@
 - 验证：之前 PROGRESS 标记的「中文乱码 bug」实为测试假阳性
   - 根因：Windows 默认 GBK 控制台直接打印 UTF-8 字节会显示乱码
   - 实际：DB（UTF-8 BLOB）/ HTTP（charset=utf-8）/ HTML（meta UTF-8）三层全程正确
-  - 浏览器实测无任何中文显示问题
+
+### Deprecated
+- AOAP 全套代码（PC + APK + 文档）：标记 deprecated 不删，Linux/Mac 仍可走
+
 
 ---
 

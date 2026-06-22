@@ -145,9 +145,12 @@ class HotspotServerService : Service() {
         try {
             ktor = embeddedServer(CIO, port = PORT, host = "0.0.0.0") {
                 install(ContentNegotiation) { json() }
-                // Ktor's built-in WS ping/pong keepalive; defaults surface a
-                // silently-dropped hotspot fast enough for our use.
-                install(WebSockets)
+                // Ktor's built-in WS ping/pong keepalive; maxFrameSize per
+                // reviewer suggestion (64KB — enough for PING/PONG/PAIR_REQUEST;
+                // M3'-C full sync will chunk >64KB payloads).  reviewers
+                install(WebSockets) {
+                    maxFrameSize = 64 * 1024
+                }
                 routing {
                     get("/ping") {
                         call.respond(PingResponse(

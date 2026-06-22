@@ -1,0 +1,125 @@
+[
+  {
+    "label": "pair_secret #0, w=0",
+    "pair_secret_hex": "0102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F20",
+    "w": 0,
+    "pin": "194661"
+  },
+  {
+    "label": "pair_secret #0, w=1",
+    "pair_secret_hex": "0102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F20",
+    "w": 1,
+    "pin": "701747"
+  },
+  {
+    "label": "pair_secret #0, w=7",
+    "pair_secret_hex": "0102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F20",
+    "w": 7,
+    "pin": "545005"
+  },
+  {
+    "label": "pair_secret #0, w=100",
+    "pair_secret_hex": "0102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F20",
+    "w": 100,
+    "pin": "615218"
+  },
+  {
+    "label": "pair_secret #0, w=99999",
+    "pair_secret_hex": "0102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F20",
+    "w": 99999,
+    "pin": "404636"
+  },
+  {
+    "label": "pair_secret #0, w=9007199254740992",
+    "pair_secret_hex": "0102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F20",
+    "w": 9007199254740992,
+    "pin": "854266"
+  },
+  {
+    "label": "pair_secret #1, w=0",
+    "pair_secret_hex": "030A11181F262D343B424950575E656C737A81888F969DA4ABB2B9C0C7CED5DC",
+    "w": 0,
+    "pin": "641835"
+  },
+  {
+    "label": "pair_secret #1, w=1",
+    "pair_secret_hex": "030A11181F262D343B424950575E656C737A81888F969DA4ABB2B9C0C7CED5DC",
+    "w": 1,
+    "pin": "348212"
+  },
+  {
+    "label": "pair_secret #1, w=7",
+    "pair_secret_hex": "030A11181F262D343B424950575E656C737A81888F969DA4ABB2B9C0C7CED5DC",
+    "w": 7,
+    "pin": "736257"
+  },
+  {
+    "label": "pair_secret #1, w=100",
+    "pair_secret_hex": "030A11181F262D343B424950575E656C737A81888F969DA4ABB2B9C0C7CED5DC",
+    "w": 100,
+    "pin": "191587"
+  },
+  {
+    "label": "pair_secret #1, w=99999",
+    "pair_secret_hex": "030A11181F262D343B424950575E656C737A81888F969DA4ABB2B9C0C7CED5DC",
+    "w": 99999,
+    "pin": "134638"
+  },
+  {
+    "label": "pair_secret #1, w=9007199254740992",
+    "pair_secret_hex": "030A11181F262D343B424950575E656C737A81888F969DA4ABB2B9C0C7CED5DC",
+    "w": 9007199254740992,
+    "pin": "910695"
+  },
+  {
+    "label": "pair_secret #2, w=0",
+    "pair_secret_hex": "FF0102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F",
+    "w": 0,
+    "pin": "216454"
+  },
+  {
+    "label": "pair_secret #2, w=1",
+    "pair_secret_hex": "FF0102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F",
+    "w": 1,
+    "pin": "980430"
+  },
+  {
+    "label": "pair_secret #2, w=7",
+    "pair_secret_hex": "FF0102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F",
+    "w": 7,
+    "pin": "504394"
+  },
+  {
+    "label": "pair_secret #2, w=100",
+    "pair_secret_hex": "FF0102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F",
+    "w": 100,
+    "pin": "586664"
+  },
+  {
+    "label": "pair_secret #2, w=99999",
+    "pair_secret_hex": "FF0102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F",
+    "w": 99999,
+    "pin": "664815"
+  },
+  {
+    "label": "pair_secret #2, w=9007199254740992",
+    "pair_secret_hex": "FF0102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F",
+    "w": 9007199254740992,
+    "pin": "048231"
+  },
+  {
+    "label": "fingerprint of pub #0",
+    "fingerprint_of_pub_hex": "0102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F20",
+    "fingerprint": "AE216C2EF5247A3782C135EFA279A3E4CDC61094270F5D2BE58C6204B7A612C9"
+  },
+  {
+    "label": "fingerprint of pub #1",
+    "fingerprint_of_pub_hex": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "fingerprint": "E0E77A507412B120F6EDE61F62295B1A7B2FF19D3DCC8F7253E51663470C888E"
+  },
+  {
+    "label": "fingerprint of pub #2",
+    "fingerprint_of_pub_hex": "0000000000000000000000000000000000000000000000000000000000000000",
+    "fingerprint": "66687AADF862BD776C8FC18B8E9F8E20089714856EE233B3902A591D0D5F2925"
+  }
+]

@@ -35,6 +35,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.long
 import kotlinx.serialization.json.put
 
 /**
@@ -88,6 +89,20 @@ class HotspotServerService : Service() {
 
     private var ktor: ApplicationEngine? = null
     private var wakeLock: PowerManager.WakeLock? = null
+
+    // M3'-A: one tracker shared across ALL pairing attempts during this
+    // service lifetime. Five wrong PINs in 60s → locked for the rest of the
+    // window. Service restart resets — by design (see PairAttemptTracker doc).
+    private val pinTracker = Crypto.PairAttemptTracker()
+
+    // Stable label phones see in PAIR_OK. Hard-coded for now; M4' UI lets the
+    // user rename their phone in the "trusted devices" panel.
+    private val phoneLabel: String = android.os.Build.MODEL ?: "PassMan phone"
+
+    // True once the user explicitly tapped "trust this PC" in HotspotPairActivity
+    // for the *current* handshake. UI sets this via setUserApproves(); the
+    // WS handler reads it on PAIR_REQUEST. Reset to false on each new socket.
+    @Volatile var userApprovesNext: Boolean = false
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -162,8 +177,13 @@ class HotspotServerService : Service() {
                     // M2' — encrypted channel. See Crypto.kt + secure.js for the
                     // handshake / frame format. Text frames = JSON handshake;
                     // binary frames = AES-GCM ciphertext.
+                    // M3' adds PAIR_REQUEST/PAIR_OK/PAIR_REJECT over encrypted frames.
                     webSocket("/socket") {
-                        handleEncryptedSocket()
+                        handleEncryptedSocket(
+                            tracker = this@HotspotServerService.pinTracker,
+                            userApproves = { this@HotspotServerService.userApprovesNext },
+                            phoneLabel = this@HotspotServerService.phoneLabel,
+                        )
                     }
                 }
             }.also { it.start(wait = false) }
@@ -182,19 +202,42 @@ class HotspotServerService : Service() {
     }
 
     /**
-     * M2' per-connection handler. Runs inside a Ktor coroutine.
+     * M2' + M3'-A per-connection handler. Runs inside a Ktor coroutine.
      *
      * State machine:
-     *   AWAIT_HELLO  --text--> derive key --> ACTIVE --binary--> echo PONG
+     *   AWAIT_HELLO  --text-->  derive aesKey + pairSecret
+     *                            --> ACTIVE
+     *   ACTIVE       --binary--> decrypt JSON, dispatch by `t`:
+     *     PING         -> reply PONG (M2')
+     *     PAIR_REQUEST -> verify PIN against rolling PIN windows;
+     *                     check lockout tracker; reply PAIR_OK or PAIR_REJECT
      *
-     * Any frame that fails to parse / decrypt closes the socket with code 1003.
-     * The browser side mirrors this in lan-pair.js.
+     * Any frame that fails GCM auth / JSON parse closes the socket with
+     * CANNOT_ACCEPT (1003). Replayed frames are silently dropped.
+     *
+     * Service-level state passed in by the caller:
+     *   tracker      — shared across all sockets, enforces 5-tries/60s lockout
+     *   userApproves — UI-set flag; true iff the user pressed "trust" since last reset
+     *   phoneLabel   — string sent back in PAIR_OK so PC can show "Mi 14 Pro"
      */
-    private suspend fun DefaultWebSocketServerSession.handleEncryptedSocket() {
+    private suspend fun DefaultWebSocketServerSession.handleEncryptedSocket(
+        tracker: Crypto.PairAttemptTracker,
+        userApproves: () -> Boolean,
+        phoneLabel: String,
+    ) {
         val kp = Crypto.generateKeypair()
         val noncePhone = Crypto.randomNonce()
         var channel: Crypto.SecureChannel? = null
+        var pairSecret: ByteArray? = null
+        val fingerprint = Crypto.fingerprintHex(kp.publicKey)
         val json = Json { ignoreUnknownKeys = true }
+
+        // Helper: encrypt + send a PAIR_* reply.
+        suspend fun replyEncrypted(obj: JsonObject) {
+            val ch = channel ?: return
+            val bytes = obj.toString().toByteArray(Charsets.UTF_8)
+            send(Frame.Binary(true, ch.seal(bytes)))
+        }
 
         try {
             for (frame in incoming) {
@@ -216,8 +259,7 @@ class HotspotServerService : Service() {
                         val noncePc = Crypto.b64decode(msg["nonce"]!!.jsonPrimitive.content)
                         val derived = Crypto.deriveSessionKey(kp.privateKey, peerPub, noncePc, noncePhone)
                         channel = Crypto.SecureChannel(derived.aesKey)
-                        // derived.pairSecret will feed the rolling-PIN handler in M3'.
-                        @Suppress("UNUSED_VARIABLE") val pairSecret = derived.pairSecret
+                        pairSecret = derived.pairSecret
 
                         val welcome = buildJsonObject {
                             put("t", "WELCOME")
@@ -225,7 +267,7 @@ class HotspotServerService : Service() {
                             put("nonce", Crypto.b64encode(noncePhone))
                         }.toString()
                         send(Frame.Text(welcome))
-                        Log.i(TAG, "WS /socket: handshake done, session_key derived")
+                        Log.i(TAG, "WS /socket: handshake done, fingerprint=${fingerprint.take(16)}…")
                     }
                     is Frame.Binary -> {
                         val ch = channel ?: run {
@@ -249,7 +291,7 @@ class HotspotServerService : Service() {
                         }
                         when (req["t"]?.jsonPrimitive?.content) {
                             "PING" -> {
-                                val echoTs = req["ts"]?.jsonPrimitive?.content?.toLongOrNull()
+                                val echoTs = req["ts"]?.jsonPrimitive?.long
                                     ?: System.currentTimeMillis()
                                 val pong = buildJsonObject {
                                     put("t", "PONG")
@@ -257,6 +299,17 @@ class HotspotServerService : Service() {
                                     put("echoTs", echoTs)
                                 }.toString().toByteArray(Charsets.UTF_8)
                                 send(Frame.Binary(true, ch.seal(pong)))
+                            }
+                            "PAIR_REQUEST" -> {
+                                handlePairRequest(
+                                    req = req,
+                                    tracker = tracker,
+                                    pairSecret = pairSecret!!,
+                                    userApproves = userApproves,
+                                    fingerprint = fingerprint,
+                                    phoneLabel = phoneLabel,
+                                    reply = ::replyEncrypted,
+                                )
                             }
                             else -> {
                                 // Unknown but well-formed & authenticated: log and drop.
@@ -271,7 +324,73 @@ class HotspotServerService : Service() {
             Log.w(TAG, "WS /socket ended: ${t.message}")
         } finally {
             channel?.close()
+            // Wipe pair_secret (HKDF derivative — small, but habit).
+            pairSecret?.let { java.util.Arrays.fill(it, 0.toByte()) }
         }
+    }
+
+    /**
+     * M3'-A PAIR_REQUEST dispatcher. Decides between PAIR_OK / PAIR_REJECT
+     * based on (a) lockout state, (b) PIN match, (c) user approval gesture.
+     *
+     * Mirrors the JS mock-phone logic in scripts/test-m3a-pairing.js so the
+     * two endpoints behave identically.
+     */
+    private suspend fun handlePairRequest(
+        req: JsonObject,
+        tracker: Crypto.PairAttemptTracker,
+        pairSecret: ByteArray,
+        userApproves: () -> Boolean,
+        fingerprint: String,
+        phoneLabel: String,
+        reply: suspend (JsonObject) -> Unit,
+    ) {
+        if (tracker.isLocked()) {
+            reply(buildJsonObject {
+                put("t", "PAIR_REJECT")
+                put("reason", "locked")
+            })
+            return
+        }
+        val pin = req["pin"]?.jsonPrimitive?.content
+        val w = req["w"]?.jsonPrimitive?.long
+        if (pin == null || w == null) {
+            // Malformed PAIR_REQUEST. Don't burn a failure slot — this isn't
+            // a wrong PIN, it's a protocol violation. Reject with bad_pin so
+            // the PC reports something user-meaningful; bump no counter.
+            reply(buildJsonObject {
+                put("t", "PAIR_REJECT")
+                put("reason", "bad_pin")
+            })
+            return
+        }
+        val matched = Crypto.verifyPin(pin, w, pairSecret)
+        if (matched == null) {
+            tracker.recordFailure()
+            reply(buildJsonObject {
+                put("t", "PAIR_REJECT")
+                // The protocol uses 'bad_pin' for both "typo" and "out of slack
+                // window" — they're indistinguishable to the user.
+                put("reason", "bad_pin")
+            })
+            return
+        }
+        if (!userApproves()) {
+            // PIN was correct, but user pressed "deny" on the phone. NOT a
+            // failure (don't lock the user out for refusing a stranger).
+            reply(buildJsonObject {
+                put("t", "PAIR_REJECT")
+                put("reason", "user_denied")
+            })
+            return
+        }
+        tracker.reset()
+        reply(buildJsonObject {
+            put("t", "PAIR_OK")
+            put("fingerprint", fingerprint)
+            put("label", phoneLabel)
+        })
+        Log.i(TAG, "WS /socket: PAIR_OK to PC, fingerprint=${fingerprint.take(16)}…")
     }
 
     private fun shutdownServer() {

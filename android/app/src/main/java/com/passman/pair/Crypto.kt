@@ -244,4 +244,86 @@ object Crypto {
     private val HEX = charArrayOf(
         '0','1','2','3','4','5','6','7','8','9','A','B','C','D','E','F'
     )
+
+    // ---------- M3'-A: PIN verification + lockout tracker ----------
+    //
+    // Byte-for-byte mirror of src/lan-pair-protocol.js#PairAttemptTracker.
+    // Sliding window: maxFailures within windowMs → locked for the rest of
+    // the window. Service restart resets (in-memory by design — an attacker
+    // can't restart the service remotely).
+    //
+    // Thread safety: HotspotServerService uses ONE tracker shared across
+    // every WS /socket connection (service field), and Ktor delivers frames
+    // for one connection on one coroutine. Different connections may race;
+    // hence @Synchronized.
+    class PairAttemptTracker(
+        val maxFailures: Int = 5,
+        val windowMs: Long = 60_000L,
+        private val clock: () -> Long = { System.currentTimeMillis() },
+    ) {
+        // ArrayList holds unix-ms timestamps of failures, oldest first.
+        private val failures = ArrayList<Long>(8)
+
+        @Synchronized
+        fun isLocked(): Boolean {
+            prune()
+            return failures.size >= maxFailures
+        }
+
+        @Synchronized
+        fun recordFailure() {
+            failures.add(clock())
+            prune()
+        }
+
+        @Synchronized
+        fun reset() { failures.clear() }
+
+        @Synchronized
+        fun unlockInMs(): Long {
+            prune()
+            if (failures.size < maxFailures) return 0L
+            // The oldest failure that still counts toward the lockout is at
+            // index (size - maxFailures). It expires at +windowMs.
+            val earliestRelevant = failures[failures.size - maxFailures]
+            return maxOf(0L, earliestRelevant + windowMs - clock())
+        }
+
+        private fun prune() {
+            val cutoff = clock() - windowMs
+            // Drop from front while older than the window.
+            while (failures.isNotEmpty() && failures[0] < cutoff) failures.removeAt(0)
+        }
+    }
+
+    /**
+     * Verify a submitted PIN against the rolling-PIN function for windows
+     * w-skew..w+skew. Returns the matched window number, or null on no match.
+     *
+     * Mirrors src/lan-pair-protocol.js#verifyPin. The ±1 slack tolerates
+     * ~45s of clock drift between consumer devices.
+     */
+    fun verifyPin(
+        submittedPin: String,
+        submittedW: Long,
+        pairSecret: ByteArray,
+        skew: Int = 1,
+    ): Long? {
+        for (off in -skew..skew) {
+            val w = submittedW + off
+            val expected = rollingPin(pairSecret, w)
+            // Constant-time compare to limit timing-side-channel even though
+            // the PIN is short-lived; 6 chars is fast either way but the
+            // habit is cheap.
+            if (constantTimeEquals(expected, submittedPin)) return w
+        }
+        return null
+    }
+
+    private fun constantTimeEquals(a: String, b: String): Boolean {
+        if (a.length != b.length) return false
+        var diff = 0
+        for (i in a.indices) diff = diff or (a[i].code xor b[i].code)
+        return diff == 0
+    }
 }

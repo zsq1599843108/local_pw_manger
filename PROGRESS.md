@@ -2,37 +2,37 @@
 
 > Claude 进入项目时**第一个读这个文件**。每次离开前必须更新「上次离开时停在哪」和「下次回来要做的」。
 
-**last update**: 2026-06-22（M2' 收到 reviewer 必改意见 ❌，M3'-A 配对协议层先行完成）
+**last update**: 2026-06-22（M2' 已修必改等复审 ✅；m3 rebase 到修好的 M2 上；开补 Kotlin PAIR handler）
 
 ## 🎯 当前阶段
 
 正在做：**v0.3 — Wi-Fi 热点改造**
-- v0.3 整体进度：~60%
-- M2' 进度：**❌ 审查未过**（Tink `AesGcmJce` 自动前置 IV 导致 wire 布局与 secure.js 不互通，离线测试因 mock-phone 用 Node WebCrypto 而漏检；需切到 `javax.crypto.Cipher` + 补 JVM 互操作测试）
-- M3'-A 进度：**✅ 协议层完成**（DB schema + fingerprint + rolling PIN + 锁定追踪器，34/34 测试，但需等 M2' 修复合并后再继续 APK UI）
-- 下个里程碑：**回 `feature/m2-encrypted-channel` 修必改 → reviewer 复审 → 合并 → 回 m3 续 APK UI**
+- v0.3 整体进度：~65%
+- M2' 进度：**🔄 已修必改等复审**（commit 1988e95：Tink → Cipher + JVM 互测 + Node 字节等价 + host 白名单 + 密钥擦除）
+- M3'-A 进度：**🟡 协议层完成（34/34），Kotlin 集成补完中**
+  - reviewer 报告 `docs/review/feature-m3-pairing-sync.md` 指出 Kotlin PAIR handler 为空、缺跨语言测试
+  - 当前在执行：补 Kotlin `PairAttemptTracker` + PAIR 消息 handler + 集成测试
+- 下个里程碑：**补完 Kotlin PAIR handler → 跑通端到端 → 提审**
 
 ## 📍 上次离开时停在哪
 
-- **里程碑**：M3'-A 协议层 34/34 测试通过（DB 13 + 配对 17 + M2 旧 4）— 但**底层 M2 在真机上必坏**
+- **里程碑**：m3 rebase 到 1988e95（含 M2 修复），所有 34 测试仍 pass；但 m3 reviewer 标记 2 个新 blocker（Kotlin PAIR handler 为空、缺跨语言测试）
 - **代码状态**：
-  - `feature/m2-encrypted-channel` (commit 55a6c45) — Tink `AesGcmJce` 误用，wire 布局错位（reviewer 报告 `docs/review/feature-m2-encrypted-channel.md`）
-  - `feature/m3-pairing-sync` (commit fcf1cbd) — 协议层代码 OK，但依赖未修复的 M2
+  - `feature/m2-encrypted-channel` @ 1988e95 — 已修必改项（Cipher + JVM 互测 + host 白名单 + 密钥擦除 + SecureRandom 字段化 + maxFrameSize 64KB）
+  - `feature/m3-pairing-sync` — 已 rebase 到 1988e95，Kotlin PAIR handler 还是 stub
 - **git 状态**：
-  - `feature/m2-encrypted-channel` 已 push，待 developer 修必改项 1+2
-  - `feature/m3-pairing-sync` 已 push，**暂停 APK UI 工作**，等 M2 合并后回来
+  - m3 已 rebase（祖先变了），需 force-push
 
 ## ⏭️ 下次回来要做的
 
-**优先级 1：修 M2'（详见 `docs/review/feature-m2-encrypted-channel.md` 必改项）**
-1. Kotlin `Crypto.kt` 改用 `javax.crypto.Cipher.getInstance("AES/GCM/NoPadding")` 自控 IV（约 30 行）
-2. 新增 JVM 单元测试，让 Kotlin Crypto 与 secure.js 字节互操作（脱离这个测试，类似问题以后还会出）
-3. 顺手做建议项：`maxFrameSize` 限上限 / `close()` 擦密钥 / `SecureRandom` 字段化 / host 加白名单
-4. push 后通知 reviewer 复审
+**M3'-A 第二批必改项（reviewer 报告 `docs/review/feature-m3-pairing-sync.md`）**：
+1. ✅ M2' AesGcmJce bug（rebase 已带入 1988e95 的修复）
+2. ⏳ Kotlin PAIR_REQUEST/PAIR_OK/PAIR_REJECT handler 接到 `/socket` 路由
+3. ⏳ Kotlin 端 `PairAttemptTracker`（service 级字段，跨连接共享）
+4. ⏳ Kotlin 跨语言 round-trip 测试（JS seal → Kotlin open / Kotlin seal → JS open）
+5. ⏳ 删除 `@Suppress("UNUSED_VARIABLE") val pairSecret` 死代码
 
-**优先级 2：M2' 合并到 main 后**
-- 回 `feature/m3-pairing-sync`，`git rebase origin/main` 带入 M2 修复
-- 继续 M3'-A 待做：APK PIN UI（`HotspotPairActivity` 滚动 PIN 显示 + PC 指纹弹窗）+ APK 持久化（`TrustStore.kt` + `EncryptedSharedPreferences`）+ PC UI（`lan-pair.js` 接 PIN 输入流程）
+完成后才考虑 M3'-B（主密码挑战）、M3'-C（全量同步）
 
 ## 🚧 阻塞 / 待解决
 
@@ -57,15 +57,14 @@
   - APK 用 Ktor CIO 起 server :9876，PC 通过 `/api/lan/probe` 代理拉 `/ping`
   - 关键坑：API 34+ FGS connectedDevice 需 CHANGE_WIFI_STATE 兜底权限
   - ping/pong 跨 Wi-Fi 热点 LAN 往返 ~50ms，AOAP 死路彻底绕开
-- 2026-06-22: **M2' 加密通道首次提交**（commit 55a6c45, branch `feature/m2-encrypted-channel`）
-  - 算法栈：X25519 ECDH → HKDF-SHA256 → AES-256-GCM，PC/APK **设计上**字节兼容
-  - Node 哑字节桥 `src/lan-ws-client.js`：不持有密钥，仅转发 ws 帧
-  - 离线测试：mock-phone（Node WebCrypto）+ 真桥 + 真 secure.js，4/4 通过
-  - ⚠️ **2026-06-22 reviewer 否决**：手机端 Tink `AesGcmJce.encrypt()` 会自动前置 12B IV，wire 实际是 `iv || ctr || tink_iv || ct || tag` 而非约定的 `iv || ctr || ct || tag`，手机↔PC 在真机上必定 GCM auth 失败；测试因 mock-phone 不走 Kotlin 路径而漏检
-  - 修复方向：Kotlin 改 `javax.crypto.Cipher` 自控 IV + 加 JVM 互操作测试，详见 `docs/review/feature-m2-encrypted-channel.md`
-- 2026-06-22: **M3'-A PIN 设计调整**：手机端**滚动 PIN**（6 位，30s 窗口，TOTP 风格 HKDF），PC 输入
-  - 静态 PIN 攻击窗口无限；滚动 PIN 把暴力窗口压到 30s，配合 5 次/min 锁定足够
-  - 协议帧带 `t` 字段（PIN 派生轮次时间戳）防时钟漂移导致 false reject
+- 2026-06-22: **M2' 加密通道首次提交**（commit 55a6c45）
+  - 算法栈：X25519 ECDH → HKDF-SHA256 → AES-256-GCM
+  - ⚠️ **2026-06-22 reviewer 否决**：手机端 Tink `AesGcmJce.encrypt()` 会自动前置 12B IV，wire 实际是 `iv || ctr || tink_iv || ct || tag`
+- 2026-06-22: **M2' 必改项修完**（commit 1988e95）
+  - Kotlin 改 `javax.crypto.Cipher` 自控 IV；加 JVM 互操作测试 + Node 字节等价验证（8/8）
+  - 建议项 4 条：maxFrameSize 64KB / close() 擦密钥 / SecureRandom 字段化 / host 白名单
+- 2026-06-22: **M3' reviewer 标记 2 blocker**：Kotlin PAIR handler + 跨语言测试
+- 2026-06-22: **m3 rebase 到 1988e95**，开补 Kotlin PAIR handler
 
 ## 🔗 关键文档跳转
 

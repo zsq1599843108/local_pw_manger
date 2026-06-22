@@ -22,7 +22,20 @@ import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.server.response.respond
 import io.ktor.server.routing.get
 import io.ktor.server.routing.routing
+import io.ktor.server.websocket.DefaultWebSocketServerSession
+import io.ktor.server.websocket.WebSockets
+import io.ktor.server.websocket.webSocket
+import io.ktor.websocket.CloseReason
+import io.ktor.websocket.Frame
+import io.ktor.websocket.readBytes
+import io.ktor.websocket.readText
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 
 /**
  * M1' (ADR-002) — foreground service running a Ktor CIO server on :9876.
@@ -132,6 +145,12 @@ class HotspotServerService : Service() {
         try {
             ktor = embeddedServer(CIO, port = PORT, host = "0.0.0.0") {
                 install(ContentNegotiation) { json() }
+                // Ktor's built-in WS ping/pong keepalive; maxFrameSize per
+                // reviewer suggestion (64KB — enough for PING/PONG/PAIR_REQUEST;
+                // M3'-C full sync will chunk >64KB payloads).  reviewers
+                install(WebSockets) {
+                    maxFrameSize = 64 * 1024
+                }
                 routing {
                     get("/ping") {
                         call.respond(PingResponse(
@@ -140,6 +159,12 @@ class HotspotServerService : Service() {
                             uptimeMs = System.currentTimeMillis() - startedAtMillis
                         ))
                     }
+                    // M2' — encrypted channel. See Crypto.kt + secure.js for the
+                    // handshake / frame format. Text frames = JSON handshake;
+                    // binary frames = AES-GCM ciphertext.
+                    webSocket("/socket") {
+                        handleEncryptedSocket()
+                    }
                 }
             }.also { it.start(wait = false) }
 
@@ -147,12 +172,103 @@ class HotspotServerService : Service() {
             running = true
             lastError = null
             updateNotification("Listening on :$PORT")
-            Log.i(TAG, "Ktor CIO server started on 0.0.0.0:$PORT")
+            Log.i(TAG, "Ktor CIO server started on 0.0.0.0:$PORT (with /socket)")
         } catch (t: Throwable) {
             running = false
             lastError = t.javaClass.simpleName + ": " + (t.message ?: "(no message)")
             updateNotification("Error: $lastError")
             Log.e(TAG, "Ktor failed to start", t)
+        }
+    }
+
+    /**
+     * M2' per-connection handler. Runs inside a Ktor coroutine.
+     *
+     * State machine:
+     *   AWAIT_HELLO  --text--> derive key --> ACTIVE --binary--> echo PONG
+     *
+     * Any frame that fails to parse / decrypt closes the socket with code 1003.
+     * The browser side mirrors this in lan-pair.js.
+     */
+    private suspend fun DefaultWebSocketServerSession.handleEncryptedSocket() {
+        val kp = Crypto.generateKeypair()
+        val noncePhone = Crypto.randomNonce()
+        var channel: Crypto.SecureChannel? = null
+        val json = Json { ignoreUnknownKeys = true }
+
+        try {
+            for (frame in incoming) {
+                when (frame) {
+                    is Frame.Text -> {
+                        // Handshake. Expect HELLO first; reply WELCOME.
+                        val msg = try {
+                            json.parseToJsonElement(frame.readText()).jsonObject
+                        } catch (t: Throwable) {
+                            send(Frame.Close(CloseReason(CloseReason.Codes.CANNOT_ACCEPT, "bad json")))
+                            return
+                        }
+                        val t = msg["t"]?.jsonPrimitive?.content
+                        if (t != "HELLO" || channel != null) {
+                            send(Frame.Close(CloseReason(CloseReason.Codes.CANNOT_ACCEPT, "expected HELLO")))
+                            return
+                        }
+                        val peerPub = Crypto.b64decode(msg["pub"]!!.jsonPrimitive.content)
+                        val noncePc = Crypto.b64decode(msg["nonce"]!!.jsonPrimitive.content)
+                        val sessionKey = Crypto.deriveSessionKey(kp.privateKey, peerPub, noncePc, noncePhone)
+                        channel = Crypto.SecureChannel(sessionKey)
+
+                        val welcome = buildJsonObject {
+                            put("t", "WELCOME")
+                            put("pub", Crypto.b64encode(kp.publicKey))
+                            put("nonce", Crypto.b64encode(noncePhone))
+                        }.toString()
+                        send(Frame.Text(welcome))
+                        Log.i(TAG, "WS /socket: handshake done, session_key derived")
+                    }
+                    is Frame.Binary -> {
+                        val ch = channel ?: run {
+                            send(Frame.Close(CloseReason(CloseReason.Codes.CANNOT_ACCEPT, "binary before handshake")))
+                            return
+                        }
+                        val plaintext = try {
+                            ch.open(frame.readBytes())
+                        } catch (re: Crypto.ReplayException) {
+                            Log.w(TAG, "replay frame rejected: ${re.got}")
+                            continue   // drop silently, keep channel alive
+                        } catch (t: Throwable) {
+                            send(Frame.Close(CloseReason(CloseReason.Codes.CANNOT_ACCEPT, "decrypt failed")))
+                            return
+                        }
+                        val req = try {
+                            json.parseToJsonElement(String(plaintext, Charsets.UTF_8)).jsonObject
+                        } catch (t: Throwable) {
+                            send(Frame.Close(CloseReason(CloseReason.Codes.CANNOT_ACCEPT, "bad plaintext json")))
+                            return
+                        }
+                        when (req["t"]?.jsonPrimitive?.content) {
+                            "PING" -> {
+                                val echoTs = req["ts"]?.jsonPrimitive?.content?.toLongOrNull()
+                                    ?: System.currentTimeMillis()
+                                val pong = buildJsonObject {
+                                    put("t", "PONG")
+                                    put("ts", System.currentTimeMillis())
+                                    put("echoTs", echoTs)
+                                }.toString().toByteArray(Charsets.UTF_8)
+                                send(Frame.Binary(true, ch.seal(pong)))
+                            }
+                            else -> {
+                                // Unknown but well-formed & authenticated: log and drop.
+                                Log.w(TAG, "unknown msg type, dropping: ${req["t"]}")
+                            }
+                        }
+                    }
+                    else -> { /* ignore ping/close frames handled by ktor */ }
+                }
+            }
+        } catch (t: Throwable) {
+            Log.w(TAG, "WS /socket ended: ${t.message}")
+        } finally {
+            channel?.close()
         }
     }
 

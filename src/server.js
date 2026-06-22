@@ -1,13 +1,46 @@
 const express = require('express');
+const http = require('http');
 const path = require('path');
+const { WebSocketServer } = require('ws');
 const { initDatabase } = require('./db');
 const crypto = require('./crypto');
 const { handshakeHandler: aoapHandshake } = require('./aoap-server');
 const { probeHandler: lanProbe } = require('./lan-server');
+const { openBridge } = require('./lan-ws-client');
 
 const app = express();
+const server = http.createServer(app);
 const PORT = 3000;
 const activePhoneTokens = new Map();
+
+// ---------- host validation (reviewer suggestion #4) ----------
+// Only RFC1918 (10/8, 172.16/12, 192.168/16), link-local (169.254/16), and
+// loopback (127/8). parseIp parses a bare IPv4 address (no DNS resolution).
+function parseIp(host) {
+  const parts = host.split('.');
+  if (parts.length !== 4) return null;
+  const nums = parts.map(s => { const n = Number(s); return (Number.isInteger(n) && n >= 0 && n <= 255) ? n : null; });
+  if (nums.some(n => n === null)) return null;
+  const [a, b, c, d] = nums;
+  return (a << 24) | (b << 16) | (c << 8) | d;  // treat as unsigned
+}
+const ALLOWED_PREFIXES = [
+  [0x7f000000, 8],    // 127.0.0.0/8
+  [0x0a000000, 8],    // 10.0.0.0/8
+  [0xa9fe0000, 16],   // 169.254.0.0/16
+  [0xac100000, 12],   // 172.16.0.0/12 (covers 172.16..172.31, incl. iPhone hotspot 172.20.10.x)
+  [0xc0a80000, 16],   // 192.168.0.0/16
+];
+function isAllowedLanHost(host) {
+  const ip = parseIp(host);
+  if (ip === null) return false;
+  for (const [prefix, bits] of ALLOWED_PREFIXES) {
+    // Use >>> 0 to coerce to unsigned 32-bit; bits=32 would be a no-op anyway.
+    const mask = bits === 0 ? 0 : (~((1 << (32 - bits)) - 1)) >>> 0;
+    if ((ip & mask) >>> 0 === (prefix & mask) >>> 0) return true;
+  }
+  return false;
+}
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
@@ -21,6 +54,53 @@ app.post('/api/aoap/handshake', aoapHandshake);
 
 // Wi-Fi-hotspot pairing (v0.3 M1', ADR-002) — the supported route.
 app.post('/api/lan/probe', lanProbe);
+
+// M2' — encrypted WebSocket channel. Browser opens
+//   ws://localhost:3000/api/lan/socket?host=...&port=...
+// and this route dials the phone's ws://<host>:<port>/socket, then bridges the
+// two as a dumb byte pipe (see lan-ws-client.js). All crypto is end-to-end
+// between browser WebCrypto and phone Tink; Node never sees a key.
+const lanWss = new WebSocketServer({ noServer: true });
+server.on('upgrade', (req, socket, head) => {
+  const url = new URL(req.url, `http://${req.headers.host}`);
+  if (url.pathname !== '/api/lan/socket') {
+    socket.destroy();
+    return;
+  }
+  lanWss.handleUpgrade(req, socket, head, (ws) => {
+    handleLanSocket(ws, url.searchParams);
+  });
+});
+
+async function handleLanSocket(browserWs, params) {
+  const host = (params.get('host') || '192.168.43.1').toString();
+  const port = Number(params.get('port') || 9876);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    browserWs.close(1008, 'bad port');
+    return;
+  }
+  // Host whitelist: only RFC1918 private space (10/8, 172.16/12, 192.168/16),
+  // link-local 169.254/16, and loopback 127/8 (for unit tests against a local
+  // mock phone). This stops a malicious page from coercing the Node bridge
+  // into dialling arbitrary internet hosts on the user's behalf.
+  // Suggestion #4 from docs/review/feature-m2-encrypted-channel.md.
+  if (!isAllowedLanHost(host)) {
+    browserWs.close(1008, JSON.stringify({ ok: false, code: 'HOST_NOT_LAN', error: `refusing to dial ${host}; only RFC1918 / 127/8 / 169.254/16 allowed` }));
+    return;
+  }
+  let bridge;
+  try {
+    bridge = await openBridge({ host, port });
+  } catch (err) {
+    // Map upstream dial failure to a code the browser can hint on.
+    const code = err.code === 'NO_SOCKET_ROUTE' ? 1003    // unsupported data
+               : err.code === 'REFUSED'         ? 1001    // going away
+               : 1011;
+    browserWs.close(code, JSON.stringify({ ok:false, code: err.code ?? 'UNKNOWN', error: err.message }));
+    return;
+  }
+  bridge.attachBrowser(browserWs);
+}
 
 
 app.post('/api/auth/setup', (req, res) => {
@@ -288,10 +368,10 @@ app.post('/api/phone/verify', (req, res) => {
   }
   
   activePhoneTokens.delete(code);
-  
+
   res.json({ success: true });
 });
 
-app.listen(PORT, () => {
+server.listen(PORT, () => {
   console.log(`Password Manager running at http://localhost:${PORT}`);
 });

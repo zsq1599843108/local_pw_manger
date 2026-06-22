@@ -1,125 +1,90 @@
-# 审查报告: feature/m3-pairing-sync
+# 复审报告: feature/m3-pairing-sync (fix commit 6501b83)
 
-分支: `feature/m3-pairing-sync` @ fcf1cbd
-基线: `main` @ 00ee8aa
-审查时间: 2026-06-22
+分支: `feature/m3-pairing-sync` @ 6501b83
+基线: `main` @ 00ee8aa（含 M2' fix 1988e95）
+复审时间: 2026-06-22
 审查人: reviewer agent
+前置审查: `docs/review/feature-m3-pairing-sync.md`（⚠️ JS 侧完整，Kotlin PAIR handler 缺失 + 继承 M2' IV bug）
 
-## 结论: ⚠️ 部分完成，需补全后才可合并
+## 结论: ⚠️ 小改后通过
 
-**状态定位**：M3' 是**半截 prototype**，而非可交付里程碑。JS/Node 侧完整（协议、DB、测试全绿），但
-Kotlin/手机侧仅完成 crypto primitives stub，PAIR_REQUEST 握手 handler 没接进 `/socket` route。
-**真机不可能完成配对**——只能在 JS mock-phone 测试里跑。
+M3' 原报告的两个 blocker 均已落实：
+1. ✅ Kotlin PAIR handler 已接入 `/socket` 路由（`HotspotServerService.handlePairRequest`）
+2. ✅ 继承的 M2' IV bug 已修（M2' fix 1988e95 已在该分支历史里）
 
-### 继承自 M2' 的 blocker（未修）
-- **`Crypto.kt` AesGcmJce auto-prepend IV bug**（`AesGcmJce.encrypt` 返回 `iv||ct||tag`，
-  Kotlin 又拼了一层自己的 IV）→ 与 `secure.js` 字节不兼容，真机上任何加密消息无法解密。
-  M3 分支仅改了 `deriveSessionKey` 返回值类型（`ByteArray` → `DerivedSecrets`），但 `seal/open` 没动。
+但发现 **1 个新 blocking 编译错误** + **1 个功能性缺口**，需在合并前/合并后处理。
 
-## 改动摘要
+## Blocker（合并前必修）
 
-### JS/Node 侧（✅ 完整、有测试）
-- `src/public/js/secure.js`：
-  - `deriveSessionKey` 改为双输出（`aesKey: CryptoKey`, `pairSecret: Uint8Array(32)`）
-  - 新增 `rollingPin(pairSecret, w)` / `pinWindow(nowMs)`：HKDF-derived 6 位滚动 PIN，TOTP 风格
-  - 新增 `fingerprintHex(pubBytes)` / `fingerprintShort`：SHA256(pubkey) 64 hex 大写，TOFU 身份
-- `src/lan-pair-protocol.js`（NEW, 131）：协议消息枚举 + JSON encode/decode + `PairAttemptTracker`
-  滑动窗口速率限制 + `verifyPin`（±1 窗口 slack）
-- `src/paired-devices.js`（NEW, 73）：`paired_devices` 表 repository，`trustDevice` / `findByFingerprint`
-  / `listDevices` / `touchLastSeen` / `revoke`
-- `src/db.js`：schema 升级到 v3，新增 `paired_devices` 表 + `schema_meta` 版本戳
-- `scripts/test-m3a-db.js`（NEW, 118）：7 个 DB 用例（schema 戳、round-trip、constraint、ordering、touch、
-  revoke、fingerprintHex 正确性）
-- `scripts/test-m3a-pairing.js`（NEW, 362）：端到端配对握手测试，5 个用例（正 PIN / 错 PIN / 5 次锁 /
-  超窗口 / 用户拒绝）
+**`android/app/src/test/java/com/passman/pair/CryptoInteropTest.kt:125` 编译错误**
+```kotlin
+assertTrue("tampered frame threw unexpected type: ${e.javaClass.name}", ...)
+```
+该文件仅 import 了 `assertArrayEquals` 和 `assertEquals`（line 30-31），**未 import `org.junit.Assert.assertTrue`**。
+- 影响：`./gradlew app:testDebugUnitTest` 编译失败 → 整个 JVM 测试套件（含新增的 `CryptoPairingTest`）跑不起来
+- 修法：加一行 `import org.junit.Assert.assertTrue`
+- 这是 M2' fix commit 1988e95 引入的，M3 分支继承下来。**1 行修复**。
 
-### Kotlin/手机侧（⚠️ 仅 crypto  primitives，未集成）
-- `android/.../Crypto.kt`：
-  - `deriveSessionKey` 从 `ByteArray` 改为 `DerivedSecrets(val aesKey, val pairSecret)`，OKM 拆 0-32/32-64
-  - 新增 `pinWindow(nowMs)` / `rollingPin(pairSecret, w)`，与 JS `rollingPin` 字节对应
-  - 新增 `fingerprintHex(pub)` / `fingerprintShort`，与 JS / Node 三者一致
-- `android/.../HotspotServerService.kt`（+2 行）：
-  - 仅存 `@Suppress("UNUSED_VARIABLE") val pairSecret = derived.pairSecret` 声明，**完全没接**
-    PairAttemptTracker / PAIR_REQUEST handler / 加密回复 → M3 协议在手机侧是空的
+## 功能性缺口（合并后 M3'-B 必修）
 
-### 项目文档
-- `CHANGELOG.md`：M2' & M3' 改动摘要 + 决策记录
-- `PROGRESS.md`：更新 M2' 状态为 ✅ 完成，M3' 任务清单 + M3'-A rolling PIN 设计决策
-- `TODO.md`：未细查（非交付关键）
+**手机端 UI 未接通 PAIR 流程** — `HotspotPairActivity.kt` 的 `buildUi()` 只有 Start/Stop server + Biometric Demo + Tether Settings 按钮，**没有**：
+- 显示当前滚动 PIN 给用户看（用户无从知道往 PC 输什么）
+- "Trust this PC" / "Deny" 按钮（`HotspotServerService.userApprovesNext` 永远是 false）
 
-## 逐项审查
+后果：真机上即使 PIN 正确，`handlePairRequest` 走到 `if (!userApproves())` 永远返回 `PAIR_REJECT user_denied`，配对无法完成。
+- 定性：M3'-A 定位为"协议后端层"，UI 可拆到 M3'-B。但 **PROGRESS.md / commit message 未明示这一拆分**，易误判 M3' 端到端可用。
+- 建议：合并前在 PROGRESS.md / CHANGELOG.md 标注「M3'-A = 后端协议层，UI 在 M3'-B」，避免 main 上的代码被当成可端到端配对。
 
-### 1. 加密/安全: ✅（JS）/ ⚠️（Kotlin 集成不足）
-- **双 HKDF 输出设计**：OKM[0:32] = AES 密钥，OKM[32:64] = pair_secret，两者同源但不同域，
-  协议分层干净 ✅
-- **滚动 PIN 设计**：`HKDF-SHA256(pair_secret, salt=window, info=passman-pair-pin-v1, out=4)`
-  → big-endian u32 % 1_000_000 → 6 位。时间窗口 30s，攻击窗口 30-90s，搭配 5 次/60s 锁定，
-  暴力破解成本足够 ✅
-- **TOFU fingerprint**：完整 SHA256（64 hex）做 DB PK，显示时取前 32 字符分 4 组显示，
-  碰撞抗性充足 ✅
-- **fingerprint 三方一致性**：JS (`secure.js`) / Node (`paired-devices.js`) / Kotlin (`Crypto.kt`)
-  都实现了 SHA256(pubbytes).toUpperCaseHex，可互操作 ✅（静态审查通过，无跨语言互跑测试）
-- **⚠️ 继承 Bug**：`Crypto.kt` `SecureChannel.seal/open` 仍有 AesGcmJce double-IV 问题（见 M2' 报告）
-- **⚠️ Kotlin 侧 lockout tracker 未实现**：仅 JS/Node 有 `PairAttemptTracker`，Kotlin 代码里没定义，
-  更没绑到 service 级字段
+## 原报告必改项落实
+
+| 项 | 状态 | 证据 |
+|---|---|---|
+| 必改 1: 修 M2' IV bug | ✅ | M2' fix 1988e95 在分支历史中，`Crypto.kt` 用 `javax.crypto.Cipher` |
+| 必改 2: 补 Kotlin PAIR handler | ✅ | `HotspotServerService.kt:303-313` dispatch PAIR_REQUEST → `handlePairRequest` (line 339-394) |
+| 必改 3: 跨语言互测 | ✅ | `CryptoPairingTest.kt` (175 行) + `m3_pairing_vectors.json` (21 vectors: 18 rollingPin + 3 fingerprint) |
+| 必改 4: 删 `@Suppress("UNUSED_VARIABLE")` 死代码 | ✅ | `pairSecret` 现在喂给 `verifyPin`，`finally` 块还 `Arrays.fill` 擦除 |
+
+## 逐项审查（M3 新增部分）
+
+### 1. 加密/安全: ✅
+- `Crypto.PairAttemptTracker` 滑动窗口逻辑与 JS `PairAttemptTracker` 字节对应 ✅
+- `Crypto.verifyPin` ±1 窗口 slack + **constant-time 字符串比较**（`constantTimeEquals`，line 323-328）— 比 JS 版还多一层时序侧信道防护 ✅
+- `pairSecret` 在 socket 关闭时 `Arrays.fill(it, 0)` 擦除（`HotspotServerService.kt:328`）✅
+- `pinTracker` 是 service 级字段（跨连接共享），与 JS mock 测试模型一致 ✅
+- `user_denied` 不消耗失败计数（`handlePairRequest:378-386` 不调 `recordFailure`）✅
+- 协议违规（缺 pin/w 字段）也不消耗计数（line 357-366）✅ — 防恶意耗尽锁定配额
 
 ### 2. 数据本地化: ✅
-- 所有配对、TOFU 记录存本地 SQLite，不上传任何服务器
-- fingerprint 是公钥哈希（完全离线，无外部依赖）
-- 测试仅用 localhost WebSocket 桥，无出站请求
-- ✅ 无 telemetry / CDN
+- 无网络上传，所有状态本地内存 / SQLite
+- 滚动 PIN 纯 HKDF 派生，无外呼
 
-### 3. 正确性: ✅（JS）/ ⚠️（Kotlin）
-- **`PairAttemptTracker` 滑动窗口**：`_prune()` 取 `now - windowMs` 为 cutoff，每次 `isLocked()`
-  或 `recordFailure()` 前剪枝，窗口边界行为合理 ✅
-- **`verifyPin` 窗口 slack**：检查 w-1, w, w+1，覆盖 ±45s 时钟漂移（普通 consumer device 水平），
-  不会因手机/PC 时间不同步导致 false reject ✅
-- **window 字段类型一致性**：Kotlin `pinWindow` 返回 `Long`（64-bit），JS `pinWindow` 返回 `Number`（53-bit，
-  够 ~28 亿年）。`PAIR_REQUEST` 用 `Number(w)` 发 JSON——可接受，但 Kotlin 方接收时需小心
-  `jsonPrimitive.long` 而非 `int`（当前 Kotlin 没接 handler，所以没问题，但以后要注意）
-- **`trustDevice` constraint**：SQLite fingerprint UNIQUE PK 防止同一手机重复 trust ✅
-- **用户拒绝不计入失败**：`user_denied` 不调用 `recordFailure()`，防止恶意用户通过狂点拒绝把服务锁死 ✅
+### 3. 正确性: ✅
+- `verifyPin` 用 `Long`（64-bit），JS 用 BigInt/Number（53-bit safe）— vectors 里 `w=9007199254740992`（2^53）证明 JSON 序列化边界 OK ✅
+- `handleEncryptedSocket` 的 `pairSecret!!`（line 307）安全：binary 帧到达前 channel 必已建（handshake 设 channel），而 pairSecret 与 channel 同点赋值 ✅
+- `replyEncrypted` helper 正确复用 channel 发加密回复 ✅
 
-### 4. 测试: ⚠️ 测试覆盖仅 JS 侧，缺跨语言与真机
-- **`test-m3a-db.js`**：7/7 用例，覆盖 `paired_devices` 表 CRUD 全路径 ✅
-- **`test-m3a-pairing.js`**：5 个端到端用例全绿（mock-phone + 真 bridge + 真 secure.js）：
-  - 正确 PIN → PAIR_OK
-  - 错误 PIN → PAIR_REJECT bad_pin
-  - 5 次错误后锁定 → PAIR_REJECT locked
-  - out-of-slack 窗口 PIN → PAIR_REJECT bad_pin
-  - 用户拒绝 → PAIR_REJECT user_denied，且不消耗失败计数
-- **测试盲区**（critical）：
-  - 🚨 Kotlin Crypto.kt 功能（rollingPin / fingerprintHex）与 JS 方从未在同一测试里互跑过
-  - 🚨 Kotlin 方完全缺 `PairAttemptTracker` 实现 + 接入 `/socket` 路由 handler
-  - 🚨 真机上 `HotspotServerService` 只懂 PING/PONG，不懂 PAIR_REQUEST
+### 4. 测试: ✅（JS）/ ⚠️（JVM）
+- JS 侧：`test-m3a-pairing.js` 17/17 通过，`test-m3a-db.js` 13/13 通过（review worktree 实跑）
+- vectors 可复现：`gen-m3-pairing-vectors.js` 重生成与 committed JSON 内容一致（仅 CRLF 差异）✅
+- JVM 侧：`CryptoPairingTest.kt` 逻辑正确（import 齐全），但 **`CryptoInteropTest.kt` 的 import 缺失会编译失败**，导致整个 testDebugUnitTest 跑不起来 → blocker
 
 ### 5. 项目约束: ✅
-- 分支命名 `feature/m3-pairing-sync` 符合约定
-- PROGRESS.md 明确标了「M2' 完成，M3' 开始」，CHANGELOG.md M3' 条目已写 ✅
-- npm 依赖无新增（复用 M2' 的 ws@^8.21.0）；Gradle 无新增（复用 M2' 的 tink + ktor-websockets）
-- 与 M3'-A 设计文档（wifi-hotspot-design.md / roadmap）一致 ✅
-
-## 必改项（blocking，合并前必须完成）
-1. **修 M2' blocker**：`Crypto.kt` `SecureChannel.seal/open` — 换 `javax.crypto.Cipher` 或
-   对 Tink 输出做 `drop(12)` / `prepend(iv)` 修正，直到与 JS `SecureChannel` 真正互操作
-2. **补 Kotlin PAIR 握手 handler**：在 `HotspotServerService.kt` `/socket` WebSocket
-   路由里实现 PAIR_REQUEST / PAIR_OK / PAIR_REJECT，搭配 `PairAttemptTracker`，与 JS 侧协议严格对应
-3. **补 Kotlin 单元测试**：至少一个「Kotlin Crypto 加密 → JS secure.js 解密」跨语言 round-trip 测试，
-   或用 Ktor test engine 打 `/socket` 握手端到端
-4. **移除 `@Suppress("UNUSED_VARIABLE") val pairSecret`** 死代码，把 `pairSecret` 真正用起来
-
-## 建议项（非 blocking，可 M3'-B 收口）
-1. `HotspotServerService.kt` `PairAttemptTracker` 应是 service 级字段（跨所有连接共享），
-   不是 per-connection——当前 JS mock 测试里是跨连接传 tracker 引用，Kotlin 也应同模型
-2. `window` 字段类型：在协议文档里明确 `w` 最大可能值，或 Kotlin 接收时用 `jsonPrimitive.long`
-   而不是 `int` 防 2038 问题（low priority）
-3. `paired_devices` 表 UI：当前只存不读，M3'-B 应加「已配对设备列表」「撤销配对」页面
-4. `fingerprintShort` 显示：当前 PC 侧 UI 还没展示 TOFU fingerprint 给用户对比
+- 分支拓扑清晰（M2' fix → M3' docs → M3' feat）
+- commit message 详尽，明示对应 reviewer 报告
+- PROGRESS.md 更新了 M3'-A 状态
 
 ## 测试结果
-- `node scripts/test-m3a-db.js`：7 passed, 0 failed（review worktree 运行通过）
-- `node scripts/test-m3a-pairing.js`：全用例通过（review worktree 运行通过）
-- 注意：两测试跑的都是 JS mock phone，**完全没涉及 Kotlin 代码**——手机端路径从未被任何测试触达
+- `node scripts/test-m3a-pairing.js` — 17/17 通过
+- `node scripts/test-m3a-db.js` — 13/13 通过
+- `node scripts/test-m2-encrypted-channel.js` — 4/4 通过（回归）
+- `node scripts/test-m2-kotlin-bytes.js` — 8/8 通过
+- vectors 可复现性：M3 pairing vectors ✅ 一致；M2 interop vectors 用随机 IV（预期，golden file 即 committed 版本）
+- JVM `./gradlew app:testDebugUnitTest` — **未跑**，因 `CryptoInteropTest.kt` 缺 import 编译失败（blocker）
+
+## 合并建议
+1. **修 `CryptoInteropTest.kt:125` 的 `assertTrue` import**（1 行）
+2. 在 PROGRESS.md / CHANGELOG.md 标注 M3'-A = 后端协议层，UI 在 M3'-B
+3. 修完后 rebase 到已合并 M2' 的 main，再 merge → main
 
 ---
 🤖 Generated with Claude Code (reviewer agent)

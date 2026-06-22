@@ -62,6 +62,13 @@ dependencies {
     implementation("io.ktor:ktor-server-core:2.3.13")
     implementation("io.ktor:ktor-server-cio:2.3.13")
     implementation("io.ktor:ktor-server-content-negotiation:2.3.13")
+    implementation("io.ktor:ktor-server-websockets:2.3.13")
     implementation("io.ktor:ktor-serialization-kotlinx-json:2.3.13")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.3")
+
+    // M2' (ADR-002) — encrypted channel primitives, mirroring src/public/js/secure.js:
+    //   X25519 ECDH → HKDF-SHA256 → AES-256-GCM.
+    // Tink exposes all three; we use Hybrid / Streaming where helpful but the raw
+    // primitives (HpkeConfig / AesGcmJce / Hkdf) underpin the wire-compatible path.
+    implementation("com.google.crypto.tink:tink-android:1.13.0")
 }

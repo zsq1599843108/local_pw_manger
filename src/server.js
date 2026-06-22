@@ -1,11 +1,15 @@
 const express = require('express');
+const http = require('http');
 const path = require('path');
+const { WebSocketServer } = require('ws');
 const { initDatabase } = require('./db');
 const crypto = require('./crypto');
 const { handshakeHandler: aoapHandshake } = require('./aoap-server');
 const { probeHandler: lanProbe } = require('./lan-server');
+const { openBridge } = require('./lan-ws-client');
 
 const app = express();
+const server = http.createServer(app);
 const PORT = 3000;
 const activePhoneTokens = new Map();
 
@@ -21,6 +25,44 @@ app.post('/api/aoap/handshake', aoapHandshake);
 
 // Wi-Fi-hotspot pairing (v0.3 M1', ADR-002) — the supported route.
 app.post('/api/lan/probe', lanProbe);
+
+// M2' — encrypted WebSocket channel. Browser opens
+//   ws://localhost:3000/api/lan/socket?host=...&port=...
+// and this route dials the phone's ws://<host>:<port>/socket, then bridges the
+// two as a dumb byte pipe (see lan-ws-client.js). All crypto is end-to-end
+// between browser WebCrypto and phone Tink; Node never sees a key.
+const lanWss = new WebSocketServer({ noServer: true });
+server.on('upgrade', (req, socket, head) => {
+  const url = new URL(req.url, `http://${req.headers.host}`);
+  if (url.pathname !== '/api/lan/socket') {
+    socket.destroy();
+    return;
+  }
+  lanWss.handleUpgrade(req, socket, head, (ws) => {
+    handleLanSocket(ws, url.searchParams);
+  });
+});
+
+async function handleLanSocket(browserWs, params) {
+  const host = (params.get('host') || '192.168.43.1').toString();
+  const port = Number(params.get('port') || 9876);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    browserWs.close(1008, 'bad port');
+    return;
+  }
+  let bridge;
+  try {
+    bridge = await openBridge({ host, port });
+  } catch (err) {
+    // Map upstream dial failure to a code the browser can hint on.
+    const code = err.code === 'NO_SOCKET_ROUTE' ? 1003    // unsupported data
+               : err.code === 'REFUSED'         ? 1001    // going away
+               : 1011;
+    browserWs.close(code, JSON.stringify({ ok:false, code: err.code ?? 'UNKNOWN', error: err.message }));
+    return;
+  }
+  bridge.attachBrowser(browserWs);
+}
 
 
 app.post('/api/auth/setup', (req, res) => {
@@ -288,10 +330,10 @@ app.post('/api/phone/verify', (req, res) => {
   }
   
   activePhoneTokens.delete(code);
-  
+
   res.json({ success: true });
 });
 
-app.listen(PORT, () => {
+server.listen(PORT, () => {
   console.log(`Password Manager running at http://localhost:${PORT}`);
 });

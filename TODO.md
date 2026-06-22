@@ -4,8 +4,8 @@
 
 ## 🔥 In Progress
 
-- [ ] **M2' — 修复 reviewer 必改项**（回 `feature/m2-encrypted-channel` 修，详见 `docs/review/feature-m2-encrypted-channel.md`）
-- [ ] **M3'-A — 配对协议**（分支 `feature/m3-pairing-sync`，协议层 34/34 测试 ✅，等 M2' 合并后继续 APK UI）
+- [ ] **M3'-A — 配对协议**（分支 `feature/m3-pairing-sync` @ 6501b83，rebase 到 main；Kotlin PAIR handler + 跨语言 JVM 测试已 push，等 reviewer 复审）
+- [x] **M2' — reviewer 必改项**（commit 1988e95，已 merge main @ 2815b08）
 
 ## ⏭️ Next（v0.3 — Wi-Fi 热点改造，覆盖 AOAP）
 
@@ -34,14 +34,17 @@
 - [ ] **修复：加 JVM 互操作测试验证 Kotlin ↔ JS 字节互通**（必改 2）
 - [ ] 建议项：maxFrameSize / close() 擦密钥 / SecureRandom 字段化 / host 白名单
 
-### M3'-A — 配对（PIN + 指纹 TOFU + paired_devices，~2.5h，本里程碑）
-- [ ] DB schema：`paired_devices(fingerprint PK, label, pubkey, trusted_at, last_seen)` + migration
-- [ ] `secure.js` / `Crypto.kt` 加 `fingerprintHex(pubBytes)`（SHA-256 前 16B → 32 hex，4-4-4 分组显示）
-- [ ] 手机端**滚动 PIN**（6 位，30s 窗口，HKDF(rolling_secret, floor(now/30s)) → 6 位 mod 1e6）
-- [ ] 加密通道消息层扩展：`PAIR_REQUEST {pin, t}` / `PAIR_OK {peer_fingerprint, peer_label}` / `PAIR_REJECT {reason}`
-- [ ] 锁定：5 次错 / 60s 窗口（in-memory，service 重启清零）
-- [ ] APK 持久化：`androidx.security:security-crypto` + `TrustStore.kt`
-- [ ] 测试：`scripts/test-m3a-pairing.js`（PIN 正/错/锁/过期）+ DB 单测
+### M3'-A — 配对（PIN + 指纹 TOFU + paired_devices，~2.5h）🟡 等 reviewer 复审
+- [x] DB schema：`paired_devices(fingerprint PK, label, pubkey, trusted_at, last_seen)` + migration
+- [x] `secure.js` / `Crypto.kt` 加 `fingerprintHex(pubBytes)`（SHA-256 64 hex，4-4-4 分组显示前 32 字符）
+- [x] 手机端**滚动 PIN**（6 位，30s 窗口，HKDF(pair_secret, floor(now/30s)) → 6 位 mod 1e6）
+- [x] 加密通道消息层扩展：`PAIR_REQUEST {pin, w}` / `PAIR_OK {fingerprint, label}` / `PAIR_REJECT {reason}`
+- [x] 锁定：5 次错 / 60s 窗口（in-memory `PairAttemptTracker`，service 重启清零）
+- [x] Kotlin handler 接到 `/socket` 路由（`handlePairRequest` 状态机）
+- [x] 跨语言 JVM 测试：`CryptoPairingTest.kt`（rollingPin 18 向量 / verifyPin / tracker / fingerprintHex）
+- [ ] APK 持久化：`androidx.security:security-crypto` + `TrustStore.kt`（M3'-A 收尾或 M4' 做）
+- [ ] APK UI：`HotspotPairActivity` 显示滚动 PIN + 用户确认按钮接 `userApprovesNext`（M3'-A 收尾或 M4' 做）
+- [ ] PC UI：`lan-pair.js` 接 PIN 输入框流程（M3'-A 收尾或 M4' 做）
 
 ### M3'-B — 主密码挑战（生物识别，~2.5h）
 - [ ] 加密帧 `CHALLENGE {nonce32}` / `RESPONSE {sig}` over established session

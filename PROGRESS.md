@@ -2,37 +2,36 @@
 
 > Claude 进入项目时**第一个读这个文件**。每次离开前必须更新「上次离开时停在哪」和「下次回来要做的」。
 
-**last update**: 2026-06-22（M2' 已修必改等复审 ✅；m3 rebase 到修好的 M2 上；开补 Kotlin PAIR handler）
+**last update**: 2026-06-22（M2' 已 merge main ✅；m3 rebase 到 main；M3' 拆 A/B/C；等复审 M3'-A）
 
 ## 🎯 当前阶段
 
 正在做：**v0.3 — Wi-Fi 热点改造**
-- v0.3 整体进度：~65%
-- M2' 进度：**🔄 已修必改等复审**（commit 1988e95：Tink → Cipher + JVM 互测 + Node 字节等价 + host 白名单 + 密钥擦除）
-- M3'-A 进度：**🟡 协议层完成（34/34），Kotlin 集成补完中**
-  - reviewer 报告 `docs/review/feature-m3-pairing-sync.md` 指出 Kotlin PAIR handler 为空、缺跨语言测试
-  - 当前在执行：补 Kotlin `PairAttemptTracker` + PAIR 消息 handler + 集成测试
-- 下个里程碑：**补完 Kotlin PAIR handler → 跑通端到端 → 提审**
+- v0.3 整体进度：~70%
+- M2' 进度：**✅ 已 merge main**（commit 2815b08，含 reviewer 必改修复 1988e95）
+- M3' 拆分：**M3'-A 配对 / M3'-B 生物识别挑战 / M3'-C 全量同步**（详见 CHANGELOG 2026-06-22 Decision）
+- M3'-A 进度：**🟡 等 reviewer 复审**（Kotlin PAIR handler + 跨语言 JVM 测试已 push，commit 6501b83）
+- 下个里程碑：**M3'-A 复审通过 → merge → 开 M3'-B**
 
 ## 📍 上次离开时停在哪
 
-- **里程碑**：m3 rebase 到 1988e95（含 M2 修复），所有 34 测试仍 pass；但 m3 reviewer 标记 2 个新 blocker（Kotlin PAIR handler 为空、缺跨语言测试）
+- **里程碑**：m3 rebase 到 main (2815b08)，修了 `CryptoInteropTest.kt` import，PROGRESS/CHANGELOG 标了 A/B/C 拆分
 - **代码状态**：
-  - `feature/m2-encrypted-channel` @ 1988e95 — 已修必改项（Cipher + JVM 互测 + host 白名单 + 密钥擦除 + SecureRandom 字段化 + maxFrameSize 64KB）
-  - `feature/m3-pairing-sync` — 已 rebase 到 1988e95，Kotlin PAIR handler 还是 stub
+  - `main` @ 2815b08 — 含 M2' 全套（加密通道 + 修复 + 互操作测试 + host 白名单）
+  - `feature/m3-pairing-sync` @ 6501b83 — rebase 到 main，Kotlin PAIR handler 全接，跨语言测试向量齐
 - **git 状态**：
-  - m3 已 rebase（祖先变了），需 force-push
+  - m3 force-push 完成（祖先从 411ff39 变为 6501b83）
+  - 等 reviewer 复审 → 通过则 merge → main
 
 ## ⏭️ 下次回来要做的
 
-**M3'-A 第二批必改项（reviewer 报告 `docs/review/feature-m3-pairing-sync.md`）**：
-1. ✅ M2' AesGcmJce bug（rebase 已带入 1988e95 的修复）
-2. ⏳ Kotlin PAIR_REQUEST/PAIR_OK/PAIR_REJECT handler 接到 `/socket` 路由
-3. ⏳ Kotlin 端 `PairAttemptTracker`（service 级字段，跨连接共享）
-4. ⏳ Kotlin 跨语言 round-trip 测试（JS seal → Kotlin open / Kotlin seal → JS open）
-5. ⏳ 删除 `@Suppress("UNUSED_VARIABLE") val pairSecret` 死代码
-
-完成后才考虑 M3'-B（主密码挑战）、M3'-C（全量同步）
+**M3'-A 复审通过后**：
+1. merge `feature/m3-pairing-sync` → main
+2. 开 M3'-B：`CHALLENGE/RESPONSE` over established session
+   - APK 复用 `BiometricDemoActivity` 模式弹 BiometricPrompt
+   - PC 发 `CHALLENGE {nonce32}`，手机签 `RESPONSE {sig}`（用首次配对生成的设备私钥）
+   - 失败兜底回 4 位码（v0.2 路径已在 aoap-server.js）
+3. M3'-C：全量同步 `SYNC_PULL/SNAPSHOT/SYNC_PUSH`，last-write-wins
 
 ## 🚧 阻塞 / 待解决
 

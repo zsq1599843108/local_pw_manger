@@ -29,6 +29,7 @@ package com.passman.pair
 import org.junit.Test
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.json.JSONArray
 import org.json.JSONObject
 

@@ -2,43 +2,41 @@
 
 > Claude 进入项目时**第一个读这个文件**。每次离开前必须更新「上次离开时停在哪」和「下次回来要做的」。
 
-**last update**: 2026-06-19（M1' Wi-Fi PoC 实测通过 ✅）
+**last update**: 2026-06-22（M2' 加密通道 commit + push ✅，开始 M3'-A 配对协议）
 
 ## 🎯 当前阶段
 
 正在做：**v0.3 — Wi-Fi 热点改造**
-- v0.3 整体进度：~50%
-- M1' 进度：**✅ 完成**（小米 14 Pro + Win11 实测 ping/pong 跑通）
-- 下个里程碑：**M2'**（加密通道，~1 天）
+- v0.3 整体进度：~70%
+- M2' 进度：**✅ 完成**（X25519 + HKDF + AES-GCM 通道，4/4 离线 e2e 通过；待小米 14 Pro 现场联调）
+- 下个里程碑：**M3'-A**（配对 PIN + 指纹 TOFU + paired_devices 持久化，~2.5h）
 
 ## 📍 上次离开时停在哪
 
-- **里程碑**：M1' 实测通过 — Win11 Chrome 通过 PC server-side proxy 拉手机 Ktor `/ping` 1 秒内回 pong
+- **里程碑**：M2' 离线 e2e 全通过 — ECDH 握手 / 加密 PING-PONG / GCM tamper 拒收 / replay 拒收
 - **代码状态**：
-  - APK：`HotspotServerService` (Ktor CIO :9876) + `HotspotPairActivity` (UI/状态/IP 列表)
-  - PC：`src/lan-server.js` (probe + 错误码) + `/api/lan/probe` 路由 + `lan-pair.js` (浏览器按钮)
-  - 关键 fix：API 34+ 必须加 `CHANGE_WIFI_STATE` 才能启 `connectedDevice` 前台服务
+  - PC：`src/public/js/secure.js`（浏览器 WebCrypto）+ `src/lan-ws-client.js`（Node 哑字节桥）+ `/api/lan/socket` 路由
+  - APK：`Crypto.kt`（Tink 镜像）+ `HotspotServerService` 加 Ktor `/socket` 路由 + 握手 FSM
+  - UI：`lan-pair.js` probe 成功后自动跑握手 + 加密 PING
+  - 测试：`scripts/test-m2-encrypted-channel.js`（mock-phone + 真 bridge）
 - **测试状态**：
-  - ✅ phone server 启停稳定
-  - ✅ PC 切 Wi-Fi 加入手机热点后 probe 通
-  - ✅ pong 含 app/ver/time/uptime，PC 端时钟漂移可视
-- **git working tree**：M1' 完成代码 + 文档同步待 commit
+  - ✅ 4/4 离线 e2e 通过（Node 24 + WebCrypto subtle shim）
+  - ⏳ 小米 14 Pro 现场联调待做
+- **git 状态**：
+  - `feature/m2-encrypted-channel` 已 push（commit 55a6c45），等 reviewer
+  - 已切 `feature/m3-pairing-sync` 开 M3'-A
 
 ## ⏭️ 下次回来要做的
 
-**M2' — 加密通道（~1 天，详见 `docs/wifi-hotspot-roadmap.md` §M2'）**
+**M3'-A — 配对协议（~2.5 小时，detail 见 `docs/wifi-hotspot-roadmap.md` §M3'）**
 
-实施前必做：
-- [ ] 跑 `/install-deps` 询问 npm `ws` 包安装方式
-- [ ] 跑 `/install-deps` 询问手机端 Tink 依赖安装方式
-- [ ] 决定：WebSocket 路由是否用 wss（自签证书）还是先 ws 裸跑（安全靠 AES-GCM 不靠 TLS）
-
-代码大致：
-1. APK：加 `io.ktor:ktor-server-websockets` + `tink-android` 依赖
-2. APK：`Crypto.kt` (X25519 + HKDF + AES-GCM) + `HotspotServerService` 加 `WEBSOCKET /socket` 路由
-3. PC：`src/public/js/secure.js` (WebCrypto subtle 同算法栈)
-4. PC：`src/lan-server.js` 加 WebSocket client（npm `ws`）
-5. 联调：PC 发 PING 加密帧 → 手机回 PONG，往返 < 50ms
+子任务：
+1. DB schema：`paired_devices` 表 + migration
+2. `secure.js` / `Crypto.kt` 加 `fingerprintHex(pubBytes)`
+3. **PIN 设计调整（2026-06-22 决策）**：手机端 TOTP-style 滚动 PIN（6 位，30s 窗口 + 实时倒计时），PC 输入
+4. 加密通道之上加消息层：`PAIR_REQUEST { pin }` / `PAIR_OK { peer_fingerprint, peer_label }` / `PAIR_REJECT { reason }`
+5. APK 持久化：`androidx.security:security-crypto` + `TrustStore.kt`（`EncryptedSharedPreferences`）
+6. 测试：`scripts/test-m3a-pairing.js`（PIN 正/错/锁/过期）+ DB 单测
 
 ## 🚧 阻塞 / 待解决
 
@@ -63,6 +61,13 @@
   - APK 用 Ktor CIO 起 server :9876，PC 通过 `/api/lan/probe` 代理拉 `/ping`
   - 关键坑：API 34+ FGS connectedDevice 需 CHANGE_WIFI_STATE 兜底权限
   - ping/pong 跨 Wi-Fi 热点 LAN 往返 ~50ms，AOAP 死路彻底绕开
+- 2026-06-22: **M2' 加密通道离线 e2e 通过**（commit 55a6c45, branch `feature/m2-encrypted-channel`）
+  - 算法栈：X25519 ECDH → HKDF-SHA256 → AES-256-GCM，PC/APK 字节兼容
+  - Node 哑字节桥 `src/lan-ws-client.js`：不持有密钥，仅转发 ws 帧
+  - 测试：mock-phone + 真桥 + 真 secure.js，4/4 通过（含 GCM tamper 拒收 + replay 拒收）
+- 2026-06-22: **M3'-A PIN 设计调整**：手机端**滚动 PIN**（6 位，30s 窗口，TOTP 风格 HKDF），PC 输入
+  - 静态 PIN 攻击窗口无限；滚动 PIN 把暴力窗口压到 30s，配合 5 次/min 锁定足够
+  - 协议帧带 `t` 字段（PIN 派生轮次时间戳）防时钟漂移导致 false reject
 
 ## 🔗 关键文档跳转
 

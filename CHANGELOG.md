@@ -4,6 +4,29 @@
 
 ## [Unreleased] — v0.3-dev (Wi-Fi 热点改造，前身 AOAP 已 deprecated)
 
+### Added (2026-06-22, M2' 加密通道离线 e2e 通过 ✅，分支 `feature/m2-encrypted-channel` commit 55a6c45)
+- 通用：算法栈 X25519 ECDH → HKDF-SHA256(info=`passman-lan-v1`) → AES-256-GCM；wire frame = `IV(12) || frame_ctr(8) || ct||tag`，AAD = `'PassMan-LAN-v1' || frame_ctr`
+- PC 端：`src/public/js/secure.js` — 浏览器 WebCrypto 完整实现（generateKeypair / deriveSessionKey / SecureChannel.seal/open）+ 独立 send/recv 单调计数器（replay 防御）
+- PC 端：`src/lan-ws-client.js` — Node 「哑字节桥」: 浏览器 ws ↔ 手机 ws 双向转发，**不持有任何密钥**
+- PC 端：`src/server.js` 加 `/api/lan/socket` WS upgrade 路由，扣到 bridge
+- PC 端：`src/public/js/lan-pair.js` probe 成功后自动打 HELLO + 加密 PING，UI 显示 RTT
+- 手机端：`android/.../Crypto.kt` — Tink 镜像（AesGcmJce + Hkdf + X25519），与 secure.js 字节兼容
+- 手机端：`HotspotServerService.kt` 加 Ktor `/socket` WebSocket 路由 + 握手 FSM（AWAIT_HELLO → ACTIVE）
+- 依赖：npm `ws@^8.21.0`，Gradle `ktor-server-websockets:2.3.13` + `tink-android:1.13.0`
+
+### Tested (2026-06-22)
+- 新增 `scripts/test-m2-encrypted-channel.js`：Node mock-phone（WebCrypto）经真 bridge 跑真 secure.js，4/4 通过：
+  - ✅ ECDH 握手完成
+  - ✅ 加密 PING → PONG 往返
+  - ✅ GCM tamper 被拒（auth failure 关闭通道）
+  - ✅ replay frame counter 被拒（ReplayError）
+- Node 24 `subtle` shim：`{name:'ECDH', namedCurve:'X25519'}` ↔ `{name:'X25519'}` 双向转换，浏览器/Node 两侧同一份 secure.js 跑
+
+### Decision (2026-06-22, M3'-A 设计调整)
+- 配对 PIN 改为**滚动 6 位**（HKDF(rolling_secret, floor(now/30s))），手机端实时刷新 + 倒计时，PC 输入
+- 原静态 PIN 的攻击窗口无限，滚动后压到 30s，配合 5 次/60s 锁定足够
+- 协议 `PAIR_REQUEST` 携带 `t` 字段标 PIN 派生轮次（防时钟漂移导致 false reject）
+
 ### Added (2026-06-19, M1' Wi-Fi PoC 实测通过 ✅)
 - 手机端：`HotspotServerService.kt` — 前台服务跑 Ktor CIO server，监听 `0.0.0.0:9876`，路由 `GET /ping → JSON{app,ver,time,uptimeMs}`
 - 手机端：`HotspotPairActivity.kt` — Start/Stop 按钮 + 实时 IPv4 列表 + 1Hz 状态轮询，跳系统 tethering 设置入口

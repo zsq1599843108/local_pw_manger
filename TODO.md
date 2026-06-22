@@ -4,8 +4,8 @@
 
 ## 🔥 In Progress
 
-- [ ] **M3'-A — 配对协议**（PIN + 指纹 TOFU + paired_devices 持久化，分支 `feature/m3-pairing-sync`，~2.5h）
-- [ ] M2' 等 reviewer 审（分支 `feature/m2-encrypted-channel`，离线 e2e 已通过，待小米 14 Pro 现场联调）
+- [ ] **M2' — 修复 reviewer 必改项**（回 `feature/m2-encrypted-channel` 修，详见 `docs/review/feature-m2-encrypted-channel.md`）
+- [ ] **M3'-A — 配对协议**（分支 `feature/m3-pairing-sync`，协议层 34/34 测试 ✅，等 M2' 合并后继续 APK UI）
 
 ## ⏭️ Next（v0.3 — Wi-Fi 热点改造，覆盖 AOAP）
 
@@ -25,12 +25,14 @@
 - [x] PC：phone.html 绿色「Pair via Wi-Fi」入口
 - [x] 联调：小米 14 Pro + Win11 实测 ping/pong 通
 
-### M2' — 加密通道（~1 天） ✅ 离线 e2e 完成
+### M2' — 加密通道（~1 天） ⚠️ 待修复（reviewer 否决，Tink AesGcmJce IV 前置 bug）
 - [x] PC: `secure.js` X25519 + HKDF + AES-GCM
-- [x] APK: `Crypto.kt` Tink 镜像同算法
+- [x] APK: `Crypto.kt` Tink 镜像同算法 **→ 需改用 `javax.crypto.Cipher`**
 - [x] WebSocket 升级（Ktor `/socket` + Node `lan-ws-client.js` 哑桥）
-- [x] PING/PONG over encrypted channel（离线 4/4 通过：握手 / PING-PONG / GCM tamper 拒收 / replay 拒收）
-- [ ] 小米 14 Pro 现场联调（等 reviewer 通过后做）
+- [x] PING/PONG over encrypted channel（离线 4/4 通过，但 mock-phone 不走 Kotlin）
+- [ ] **修复：Kotlin 改用 `javax.crypto.Cipher` 自控 IV**（必改 1）
+- [ ] **修复：加 JVM 互操作测试验证 Kotlin ↔ JS 字节互通**（必改 2）
+- [ ] 建议项：maxFrameSize / close() 擦密钥 / SecureRandom 字段化 / host 白名单
 
 ### M3'-A — 配对（PIN + 指纹 TOFU + paired_devices，~2.5h，本里程碑）
 - [ ] DB schema：`paired_devices(fingerprint PK, label, pubkey, trusted_at, last_seen)` + migration

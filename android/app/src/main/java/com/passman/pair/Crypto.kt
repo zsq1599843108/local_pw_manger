@@ -71,17 +71,48 @@ object Crypto {
     fun randomNonce(): ByteArray = ByteArray(NONCE_SIZE).also { SecureRandom().nextBytes(it) }
 
     /**
-     * Derive the 32-byte AES key from the ECDH shared secret.
+     * Derive the 32-byte AES key and a 32-byte raw pair_secret from the ECDH
+     * shared secret in one HKDF expansion. The pair_secret feeds the M3'
+     * rolling PIN — see rollingPin().
+     *
      *   salt = noncePc(16) || noncePhone(16)
-     *   info = "passman-lan-v1"
+     *   info = "passman-lan-v1", out = 64 bytes
+     *
+     * Mirrors src/public/js/secure.js#deriveSessionKey byte-for-byte.
      */
+    data class DerivedSecrets(val aesKey: ByteArray, val pairSecret: ByteArray)
+
     fun deriveSessionKey(
         myPriv: ByteArray, peerPub: ByteArray,
         noncePc: ByteArray, noncePhone: ByteArray,
-    ): ByteArray {
+    ): DerivedSecrets {
         val shared = X25519.computeSharedSecret(myPriv, peerPub)
         val salt = noncePc + noncePhone
-        return Hkdf.computeHkdf("SHA256", shared, salt, INFO.toByteArray(), KEY_SIZE)
+        val okm = Hkdf.computeHkdf("SHA256", shared, salt, INFO.toByteArray(), KEY_SIZE * 2)
+        return DerivedSecrets(
+            aesKey = okm.copyOfRange(0, KEY_SIZE),
+            pairSecret = okm.copyOfRange(KEY_SIZE, KEY_SIZE * 2),
+        )
+    }
+
+    // ---------- M3'-A rolling pairing PIN ----------
+    //
+    // Mirror of secure.js#rollingPin: PIN_t = HKDF(pair_secret, window=floor(now/30s),
+    // info="passman-pair-pin-v1", 4 bytes) → big-endian u32 % 1_000_000, padded to 6.
+
+    private const val PIN_INFO = "passman-pair-pin-v1"
+    const val PIN_WINDOW_MS = 30_000L
+
+    fun pinWindow(nowMs: Long): Long = nowMs / PIN_WINDOW_MS
+
+    fun rollingPin(pairSecret: ByteArray, w: Long): String {
+        val salt = ByteBuffer.allocate(8).putLong(w).array()
+        val bits = Hkdf.computeHkdf("SHA256", pairSecret, salt, PIN_INFO.toByteArray(), 4)
+        val u32 = ((bits[0].toLong() and 0xFF) shl 24) or
+                  ((bits[1].toLong() and 0xFF) shl 16) or
+                  ((bits[2].toLong() and 0xFF) shl 8) or
+                  (bits[3].toLong() and 0xFF)
+        return (u32 % 1_000_000L).toString().padStart(6, '0')
     }
 
     /**
@@ -185,4 +216,32 @@ object Crypto {
 
     fun b64encode(bytes: ByteArray): String = android.util.Base64.encodeToString(bytes, ENC)
     fun b64decode(str: String): ByteArray = android.util.Base64.decode(str, ENC)
+
+    // ---------- TOFU fingerprint ----------
+
+    /**
+     * SHA-256(pubkey) as 64-char uppercase hex. Byte-for-byte mirror of
+     * fingerprintHex in src/public/js/secure.js and src/paired-devices.js.
+     * Used as the trusted-device identity at the application layer.
+     */
+    fun fingerprintHex(pub: ByteArray): String {
+        val digest = java.security.MessageDigest.getInstance("SHA-256").digest(pub)
+        return buildString(digest.size * 2) {
+            for (b in digest) {
+                val v = b.toInt() and 0xFF
+                append(HEX[v ushr 4])
+                append(HEX[v and 0xF])
+            }
+        }
+    }
+
+    /** "XXXX XXXX XXXX XXXX XXXX XXXX XXXX XXXX" — first 32 hex chars in 4-blocks. */
+    fun fingerprintShort(fpHex: String): String {
+        val head = fpHex.take(32)
+        return head.chunked(4).joinToString(" ")
+    }
+
+    private val HEX = charArrayOf(
+        '0','1','2','3','4','5','6','7','8','9','A','B','C','D','E','F'
+    )
 }

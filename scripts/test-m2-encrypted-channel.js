@@ -115,8 +115,9 @@ function startMockPhone(port) {
             const shared = new Uint8Array(await wc.subtle.deriveBits({ name: 'ECDH', public: peerPub }, kp.privateKey, 256));
             const salt = S.concat(noncePc, noncePhone);
             const baseKey = await wc.subtle.importKey('raw', shared, 'HKDF', false, ['deriveBits']);
-            const okm = new Uint8Array(await wc.subtle.deriveBits({ name: 'HKDF', hash: 'SHA-256', salt, info: INFO }, baseKey, 256));
-            channel = await wc.subtle.importKey('raw', okm, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
+            const okm = new Uint8Array(await wc.subtle.deriveBits({ name: 'HKDF', hash: 'SHA-256', salt, info: INFO }, baseKey, 512));
+            // First 32B = AES key (matches secure.js deriveSessionKey contract).
+            channel = await wc.subtle.importKey('raw', okm.subarray(0, 32), { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
             ws.send(JSON.stringify({ t: 'WELCOME', pub: S.b64encode(pubBytes), nonce: S.b64encode(noncePhone) }));
           } else {
             if (!channel) { ws.close(1003, 'binary before handshake'); return; }
@@ -180,8 +181,8 @@ async function runClient(port) {
       if (!isBinary) {
         const { pubBytes: peerPub, noncePhone } = S.parseWelcome(data.toString());
         const peerKey = await S.importPeerPub(peerPub);
-        const key = await S.deriveSessionKey(priv, peerKey, noncePc, noncePhone);
-        channel = new S.SecureChannel(key);
+        const { aesKey } = await S.deriveSessionKey(priv, peerKey, noncePc, noncePhone);
+        channel = new S.SecureChannel(aesKey);
         results.handshake = true;
         // send PING
         const ping = new TextEncoder().encode(JSON.stringify({ t: 'PING', ts: Date.now() }));

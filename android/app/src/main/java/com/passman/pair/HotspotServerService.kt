@@ -214,8 +214,10 @@ class HotspotServerService : Service() {
                         }
                         val peerPub = Crypto.b64decode(msg["pub"]!!.jsonPrimitive.content)
                         val noncePc = Crypto.b64decode(msg["nonce"]!!.jsonPrimitive.content)
-                        val sessionKey = Crypto.deriveSessionKey(kp.privateKey, peerPub, noncePc, noncePhone)
-                        channel = Crypto.SecureChannel(sessionKey)
+                        val derived = Crypto.deriveSessionKey(kp.privateKey, peerPub, noncePc, noncePhone)
+                        channel = Crypto.SecureChannel(derived.aesKey)
+                        // derived.pairSecret will feed the rolling-PIN handler in M3'.
+                        @Suppress("UNUSED_VARIABLE") val pairSecret = derived.pairSecret
 
                         val welcome = buildJsonObject {
                             put("t", "WELCOME")

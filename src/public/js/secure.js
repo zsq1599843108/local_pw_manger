@@ -89,9 +89,17 @@ async function importPeerPub(pubBytes) {
 }
 
 /**
- * Derive the 32-byte AES-256 session key from the ECDH shared secret.
+ * Derive the 32-byte AES-256 session key and a 32-byte raw "pair_secret"
+ * from the ECDH shared secret. We derive both in one HKDF expansion (info
+ * fixed at "passman-lan-v1", out = 64 bytes) so the two values are linked
+ * to the same handshake but live in separate domains.
+ *
  *   salt = noncePc(16) || noncePhone(16)
  *   info = "passman-lan-v1"
+ *
+ * Returns { aesKey: CryptoKey, pairSecret: Uint8Array(32) }. `aesKey` is
+ * non-extractable; `pairSecret` is raw bytes and feeds rollingPin() during
+ * the M3' pairing handshake.
  */
 async function deriveSessionKey(priv, peerPub, noncePc, noncePhone) {
   const shared = new Uint8Array(
@@ -99,8 +107,12 @@ async function deriveSessionKey(priv, peerPub, noncePc, noncePhone) {
   const salt = concat(noncePc, noncePhone);
   const baseKey = await crypto.subtle.importKey('raw', shared, 'HKDF', false, ['deriveBits']);
   const okm = new Uint8Array(await crypto.subtle.deriveBits(
-    { name: 'HKDF', hash: 'SHA-256', salt, info: INFO }, baseKey, 256));
-  return crypto.subtle.importKey('raw', okm, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
+    { name: 'HKDF', hash: 'SHA-256', salt, info: INFO }, baseKey, 512));
+  const aesRaw = okm.subarray(0, 32);
+  const pairSecret = okm.slice(32, 64);   // .slice copies into its own buffer
+  const aesKey = await crypto.subtle.importKey(
+    'raw', aesRaw, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
+  return { aesKey, pairSecret };
 }
 
 // ---------- encrypted channel ----------
@@ -173,9 +185,69 @@ function randomNonce() {
   return crypto.getRandomValues(new Uint8Array(16));
 }
 
+// ---------- M3'-A rolling pairing PIN ----------
+//
+// Goal: shrink the attack window for the pairing handshake. A static PIN is
+// brute-forceable indefinitely; we instead derive PIN_t = HKDF(pair_secret,
+// floor(now/30s)) % 1_000_000, so an attacker has at most one 30s window per
+// session. On top of that, the phone limits to 5 wrong attempts per 60s.
+//
+// `pair_secret` is the second 32 bytes of the HKDF expansion done in
+// deriveSessionKey() — same handshake, separate domain from the AES key.
+// info = "passman-pair-pin-v1" so the PIN domain is separated from any other
+// future use of pair_secret.
+
+const PIN_INFO = new TextEncoder().encode('passman-pair-pin-v1');
+const PIN_WINDOW_MS = 30_000;
+
+function pinWindow(nowMs) {
+  return Math.floor(nowMs / PIN_WINDOW_MS);
+}
+
+/**
+ * Derive the rolling 6-digit PIN for window `w` from pair_secret.
+ * Both sides compute the same value when they agree on `w`.
+ * Returns a zero-padded 6-character string.
+ */
+async function rollingPin(pairSecret, w) {
+  const w8 = new Uint8Array(8);
+  let v = BigInt(w);
+  for (let i = 7; i >= 0; i--) { w8[i] = Number(v & 0xFFn); v >>= 8n; }
+  const baseKey = await crypto.subtle.importKey('raw', pairSecret, 'HKDF', false, ['deriveBits']);
+  const bits = new Uint8Array(await crypto.subtle.deriveBits(
+    { name: 'HKDF', hash: 'SHA-256', salt: w8, info: PIN_INFO }, baseKey, 32));
+  // Big-endian 32-bit -> uint32 -> % 1e6, zero-pad to 6 digits.
+  const u32 = ((bits[0] << 24) | (bits[1] << 16) | (bits[2] << 8) | bits[3]) >>> 0;
+  return String(u32 % 1_000_000).padStart(6, '0');
+}
+
+/**
+ * SHA-256(pubkey) as 64-char uppercase hex. Used as the TOFU identity for a
+ * trusted phone (PK in paired_devices). For display, callers usually slice
+ * the first 32 chars and group as XXXX-XXXX-XXXX-XXXX so the user can read
+ * the same string off both screens.
+ *
+ * Byte-for-byte mirror of fingerprintHex in src/paired-devices.js and
+ * Crypto.kt.fingerprintHex.
+ */
+async function fingerprintHex(pubBytes) {
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', pubBytes));
+  let s = '';
+  for (const b of digest) s += b.toString(16).padStart(2, '0');
+  return s.toUpperCase();
+}
+
+/** Pretty-print 32 hex chars as "XXXX XXXX XXXX XXXX XXXX XXXX XXXX XXXX" (4-block). */
+function fingerprintShort(fpHex) {
+  const head = fpHex.slice(0, 32);
+  return head.replace(/(.{4})/g, '$1 ').trim();
+}
+
 window.PassManSecure = {
   generateKeypair, importPeerPub, deriveSessionKey, SecureChannel,
   encodeHello, parseWelcome, randomNonce,
+  fingerprintHex, fingerprintShort,
+  rollingPin, pinWindow, PIN_WINDOW_MS,
   b64encode, b64decode, concat,
   CTR_SIZE, IV_SIZE, TAG_SIZE,
 };

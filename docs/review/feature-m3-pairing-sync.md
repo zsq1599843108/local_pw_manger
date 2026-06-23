@@ -192,3 +192,100 @@ rebase 干净（6 commit、纯 M3'-A、不含已 merge 的 M2），Kotlin PAIR h
 
 ---
 🤖 Generated with Claude Code (reviewer agent)
+
+---
+
+# 复审③报告: feature/m3-pairing-sync @ d41e791 (review #3)
+
+分支: `feature/m3-pairing-sync` @ d41e791
+基线: `main` @ 2815b08（含 M2' merge）
+复审时间: 2026-06-23
+审查人: reviewer agent
+前置审查: 复审②（commit 6f903f9）— ❌ blocker `CryptoPairingTest.kt:100 digitToChar` 编译失败
+
+## 结论: ✅ 通过（可合并 main）
+
+复审②的 1 个 blocker + 已落实的 2 个 non-blocking 建议全部到位，JVM 测试由 0 执行变为 14/14 全过。Developer 在修 blocker 时**附带修了 2 个 reviewer 未发现但实际存在的 bug**（见下"附加发现"），合理且必要，整体审慎可接受。
+
+## 本批新增/修复的 commit
+```
+d41e791 feat(m3): constant-time verifyPin in JS to match Kotlin
+1cd0ff5 docs(m3): correct JVM test count to 14
+0d322b4 fix(m3): CryptoPairingTest digitToChar -> Char arithmetic (review #2)
+```
+
+## 改动摘要 (40f200f..d41e791)
+
+| 文件 | 改动 | 性质 |
+|------|------|------|
+| `android/.../CryptoPairingTest.kt` | `(Char+Int).digitToChar()` → 纯 Char 算术翻转；rollingPin 测试加 `has("pair_secret_hex")` guard 跳过 fingerprint 行 | blocker fix + 附带 fix |
+| `android/.../Crypto.kt` | `Hkdf.computeHkdf("SHA256", ...)` → `"HMACSHA256"`（两处：deriveSecrets + rollingPin） | **附带 fix（关键）** |
+| `src/lan-pair-protocol.js` | 新增 `constantTimeEquals`；`verifyPin` 改用常量时间比较 + 即使 match 也跑完所有窗口 | non-blocking 建议 #2 |
+| `CHANGELOG.md` | "12 个 JVM 用例" → "10 个 + 4 个 M2' = 14 个" | non-blocking 建议 #1 |
+
+## 逐项检查
+
+1. **加密/安全**: ✅
+   - `constantTimeEquals` 实现正确：长度先比再 XOR-OR，O(len) 早返；且 `verifyPin` 即使匹配也跑完 `2*skew+1=3` 个窗口（外层 loop 用 `matchedW === null` 守护），泄露上限是"是否命中"而非"哪个窗口"——与 Kotlin `constantTimeEquals` 对称。
+   - `digitToChar` 修复使用纯 Char 算术（`if (c0 == '9') '0' else (c0 + 1)`），无引入随机性、无破坏测试意图（翻转首位伪造 PIN）。
+   - **附带的 `"SHA256" → "HMACSHA256"` 改动**（见"附加发现"）：经验证不改 wire format，跨语言向量仍对齐。
+
+2. **数据本地化**: ✅ 本批纯算法/测试改动，无网络、无 telemetry、无外链。
+
+3. **正确性**: ✅
+   - `verifyPin` 重写后语义不变：`matchedW` 单次赋值守护保证只记录首次命中，`{ok:true, matchedW}` 返回结构对外不变（Node 测试 17/17 全过证明）。
+   - `rollingPin_matches_jsReference` 加 `has("pair_secret_hex")` guard 是必要的——vector 文件确实混合了 rollingPin 和 fingerprint 两类行（与 `fingerprintHex_matches_jsReference` 的 guard 对称），原代码遇到 fingerprint 行会抛 JSONException。这是复审②未发现的潜在错误，developer 主动修了。
+   - `digitToChar` fix 后 `tampered` 仍是合法 6 位数字字符串，且与 `pinForW` 强制不同（测试内有 deterministic 守卫），断言意图完整保留。
+
+4. **测试**: ✅
+   - **JVM**：`./gradlew app:testDebugUnitTest --rerun-tasks` BUILD SUCCESSFUL in 20s；JUnit XML 显示：
+     - `CryptoPairingTest`: tests=10, failures=0, errors=0, skipped=0
+     - `CryptoInteropTest`: tests=4, failures=0, errors=0, skipped=0
+     - **合计 14/14 全过**，与 CHANGELOG 修正后的数字一致。
+   - **Node**：`test-m3a-db.js` 13/13、`test-m3a-pairing.js` 17/17、`test-m2-encrypted-channel.js` 4/4，M2 回归未破坏。
+   - 注意 developer 第一次提交时构建缓存命中显示 `UP-TO-DATE`，reviewer 加 `--rerun-tasks` 真正强制重跑确认编译 + 执行均成功。
+
+5. **项目约束**: ✅ 三个 commit 拆分清晰（fix / docs / feat）符合规范；commit message 标注 `(review #2)`；无 force-push；无新外部依赖。
+
+## 附加发现（developer 在修 blocker 时附带修复，reviewer 复核认可）
+
+1. **`Crypto.kt` HKDF MAC 别名 `"SHA256" → "HMACSHA256"`**（commit 0d322b4，**关键修复，原审查漏掉**）
+   - **触发场景**：JVM 单元测试在 SunJCE 上运行（不是 Android 设备的 Conscrypt）。SunJCE 的 `Mac.getInstance("SHA256")` 抛 `NoSuchAlgorithmException`——因为 `"SHA256"` 是消息摘要算法名而非 MAC 算法名。Conscrypt 接受 `"SHA256"` 作为 `"HmacSHA256"` 别名，SunJCE 不接受。
+   - **影响范围**：如果不改，复审②的 blocker 修完后会暴露 5 个新失败（rollingPin / verifyPin 全系列）。也就是说原 commit 在物理设备能跑通但在 CI/JVM 跑不通。
+   - **正确性**：`"HMACSHA256"` 是 Tink `Hkdf` 文档的 canonical name，两者底层用同一 PRF (RFC 2104 HMAC + SHA-256)，输出字节完全一致。已通过事实验证：Node 侧 `test-m3a-db.js` 用 fingerprint 向量、`test-m3a-pairing.js` 用 rollingPin 向量、JVM 侧 `rollingPin_matches_jsReference`/`fingerprintHex_matches_jsReference` 三方测试 14/14 全过——跨语言向量对齐成立。
+   - **是否影响已合入 main 的 M2'**？查 `Crypto.kt` 用 HKDF 仅这两处（`deriveSecrets` 派生 aesKey+pairSecret、`rollingPin`），全在 M3' 引入。M2' merged 版本（`2815b08`）只用 `AesGcmJce`/javax Cipher，不调 HKDF。**M2' 不受影响**。
+   - **结论**: ✅ 修得对、修得必要、影响域可控。
+
+2. **`CryptoPairingTest.kt:47` 加 `has("pair_secret_hex")` guard**
+   - vector 文件 (`m3_pairing_vectors.json`) 同时含 rollingPin 条目 (`pair_secret_hex`/`pin`) 和 fingerprint 条目 (`fingerprint_of_pub_hex`/`fingerprint`)，老代码 `rollingPin_matches_jsReference` 不加守卫遇到 fingerprint 行会 JSONException。复审②未深读 vector 结构，遗漏。Developer 修 blocker 时遇到自然发现并补上。
+   - **结论**: ✅ 必要的附带修复。
+
+## 必改项 (blocking)
+
+无。
+
+## 建议项 (non-blocking)
+
+- **复审②建议 #3「`userApprovesNext` 生命周期」未做**：service-level `@Volatile var` 多 socket 共享、无每 socket 重置、无 UI setter。已在 TODO.md L46 明确归到 "M3'-A 收尾或 M4' 做"，**预期范围内**，不阻塞本批合并。
+- **复审②建议 #4「`paired-devices.js` 未接服务端」未做**：同上，已归 TODO，M3'-B/M4' 处理。
+- 提示：M3'-B 实现 APK UI 时务必先补 `userApprovesNext` 的 per-socket reset，否则多 PC 抢配对会串味（如复审②所示风险）。
+
+## 跑测试结果
+
+| 命令 | 结果 |
+|------|------|
+| `./gradlew app:testDebugUnitTest --rerun-tasks` | ✅ BUILD SUCCESSFUL in 20s — CryptoPairingTest 10/10、CryptoInteropTest 4/4，合计 14/14 |
+| `node scripts/test-m3a-db.js` | ✅ 13/13 passed |
+| `node scripts/test-m3a-pairing.js` | ✅ 17/17 passed |
+| `node scripts/test-m2-encrypted-channel.js` | ✅ 4/4 passed（M2 回归） |
+
+测试在主工作区 `F:/Projects/local_password_manager`（分支 `feature/m3-pairing-sync` @ d41e791，工作树干净）跑；用 `--rerun-tasks` 强制绕过 Gradle build cache 确保真实执行。
+
+## 下一步
+
+✅ **可合并**：本 reviewer 将执行 `git merge --no-ff feature/m3-pairing-sync` → `git push origin main`。
+- 合并后通知 developer：feature 分支可删（`git branch -d feature/m3-pairing-sync`）。
+- 开 M3'-B 前务必先做 `userApprovesNext` per-socket reset + JS 接 `trustDevice` 调用，闭合 M3'-A TOFU 持久化。
+
+---
+🤖 Generated with Claude Code (reviewer agent, review #3)

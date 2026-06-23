@@ -42,9 +42,11 @@
 - [x] 锁定：5 次错 / 60s 窗口（in-memory `PairAttemptTracker`，service 重启清零）
 - [x] Kotlin handler 接到 `/socket` 路由（`handlePairRequest` 状态机）
 - [x] 跨语言 JVM 测试：`CryptoPairingTest.kt`（rollingPin 18 向量 / verifyPin / tracker / fingerprintHex）
-- [ ] APK 持久化：`androidx.security:security-crypto` + `TrustStore.kt`（M3'-A 收尾或 M4' 做）
-- [ ] APK UI：`HotspotPairActivity` 显示滚动 PIN + 用户确认按钮接 `userApprovesNext`（M3'-A 收尾或 M4' 做）
-- [ ] PC UI：`lan-pair.js` 接 PIN 输入框流程（M3'-A 收尾或 M4' 做）
+- [ ] APK 持久化：`androidx.security:security-crypto` + `TrustStore.kt`（移到 M4' — 当前 PC 端已落 sqlite，APK 端目前不持久化已配对 PC，下次连仍需重 PIN，可接受）
+- [x] APK UI：`HotspotPairActivity` 显示滚动 PIN + 用户确认按钮接 `userApprovesNext`（commit 1781edc）
+- [x] PC UI：`lan-pair.js` 接 PIN 输入框流程 + POST /api/lan/devices/trust 持久化（commit 1781edc）
+- [x] PC 端 `/api/lan/devices/*` REST 端点（trust/list/revoke）+ 24 个路由集成测试（commit 2481867）
+- [x] `userApprovesNext` per-socket reset + PAIR_OK 后消费（commit 1235c73）
 
 ### M3'-B — 主密码挑战（生物识别，~2.5h）
 - [ ] 加密帧 `CHALLENGE {nonce32}` / `RESPONSE {sig}` over established session

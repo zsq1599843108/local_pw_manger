@@ -2,36 +2,33 @@
 
 > Claude 进入项目时**第一个读这个文件**。每次离开前必须更新「上次离开时停在哪」和「下次回来要做的」。
 
-**last update**: 2026-06-22（M2' 已 merge main ✅；m3 rebase 到 main；M3' 拆 A/B/C；等复审 M3'-A）
+**last update**: 2026-06-23（M3'-A merged main; M3'-A 收尾 3 项完成；feature/m3b-biometric-challenge 准备进 B-1）
 
 ## 🎯 当前阶段
 
 正在做：**v0.3 — Wi-Fi 热点改造**
-- v0.3 整体进度：~70%
-- M2' 进度：**✅ 已 merge main**（commit 2815b08，含 reviewer 必改修复 1988e95）
-- M3' 拆分：**M3'-A 配对 / M3'-B 生物识别挑战 / M3'-C 全量同步**（详见 CHANGELOG 2026-06-22 Decision）
-- M3'-A 进度：**🟡 等 reviewer 复审**（Kotlin PAIR handler + 跨语言 JVM 测试已 push，commit 6501b83）
-- 下个里程碑：**M3'-A 复审通过 → merge → 开 M3'-B**
+- v0.3 整体进度：~75%
+- M3'-A：**✅ merged main** @ 712bf39（PIN 配对 + paired_devices TOFU）
+- M3'-A 收尾三项：**✅ 完成**（user-approve reset / REST 持久化 / 两端 UI），在 feature/m3b-biometric-challenge 分支
+- M3'-B 设计：**✅ 设计稿 0f5cba4 已上 main** (`docs/m3b-biometric-challenge-design.md`)
+- M3'-B 实施：**⏳ 待用户确认 §7 fallback 取舍后开 B-1**
+- 下个里程碑：**用户确认 M3'-B fallback 方案 → 开 B-1**
 
 ## 📍 上次离开时停在哪
 
-- **里程碑**：m3 rebase 到 main (2815b08)，修了 `CryptoInteropTest.kt` import，PROGRESS/CHANGELOG 标了 A/B/C 拆分
+- **里程碑**：开 feature/m3b-biometric-challenge，先把 M3'-A 收尾三项作前置 commit 处理（commits 1235c73 / 2481867 / 1781edc）
 - **代码状态**：
-  - `main` @ 2815b08 — 含 M2' 全套（加密通道 + 修复 + 互操作测试 + host 白名单）
-  - `feature/m3-pairing-sync` @ 6501b83 — rebase 到 main，Kotlin PAIR handler 全接，跨语言测试向量齐
+  - `main` @ `0f5cba4` — M3'-A merge + M3'-B 设计稿
+  - `feature/m3b-biometric-challenge` @ `1781edc` — 3 个收尾 commit，未 push（M3'-B 本体未开工）
 - **git 状态**：
-  - m3 force-push 完成（祖先从 411ff39 变为 6501b83）
-  - 等 reviewer 复审 → 通过则 merge → main
+  - 旧分支 feature/m3-pairing-sync 本地+远端均已删
+  - 当前分支落后 push（M3'-A 收尾 commit 等 M3'-B 实施完一起走 PR 或独立小 PR，看后续）
 
 ## ⏭️ 下次回来要做的
 
-**M3'-A 复审通过后**：
-1. merge `feature/m3-pairing-sync` → main
-2. 开 M3'-B：`CHALLENGE/RESPONSE` over established session（**设计稿已就位**：`docs/m3b-biometric-challenge-design.md`）
-   - 决策：方案 B — Android Keystore HMAC + bio gate（TEE 担保 biometric_ok）
-   - PAIR_OK 帧扩展 `device_hmac_key_b64` + db schema v4
-   - 失败兜底回 4 位码（v0.2 路径已在 aoap-server.js）+ fallback 路径下禁用高敏 purpose
-3. M3'-C：全量同步 `SYNC_PULL/SNAPSHOT/SYNC_PUSH`，last-write-wins
+1. **用户确认 M3'-B 设计稿 §7**：fallback PIN 路径双副本 hmac_key 方案是否可接受
+2. 通过后开 **B-1**：PAIR_OK 帧扩展 `device_hmac_key_b64` + db schema v4 migration
+3. 之后 B-2 ~ B-7 按设计稿顺序推
 
 ## 🚧 阻塞 / 待解决
 

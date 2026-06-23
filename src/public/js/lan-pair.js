@@ -1,4 +1,4 @@
-// Wi-Fi hotspot pairing UI logic for phone.html (M1' PoC + M2' encrypted channel).
+// Wi-Fi hotspot pairing UI logic for phone.html (M1' PoC + M2' encrypted channel + M3'-A pairing).
 //
 // Plain script (not a module) so the inline onclick="startLanProbe()" can
 // call it. Uses fetch against /api/lan/probe; the Express handler proxies
@@ -7,6 +7,11 @@
 // M2' adds: after a successful probe, open /api/lan/socket (Node bridges to
 // the phone's /socket), run the ECDH handshake over text frames, then send
 // an encrypted PING and expect an encrypted PONG back.
+//
+// M3'-A adds: after the encrypted channel is live, prompt the user for the
+// 6-digit rolling PIN shown on the phone screen, send a PAIR_REQUEST encrypted
+// over the channel, and on PAIR_OK persist the device's fingerprint+pubkey to
+// the PC via POST /api/lan/devices/trust.
 
 (function () {
   const btn  = document.getElementById('lan-btn');
@@ -114,8 +119,13 @@
           const { pubBytes: peerPub, noncePhone } = S.parseWelcome(ev.data);
           append('← WELCOME: phone pubkey received, deriving session_key');
           const peerKey = await S.importPeerPub(peerPub);
-          const { aesKey } = await S.deriveSessionKey(priv, peerKey, noncePc, noncePhone);
+          const { aesKey, pairSecret } = await S.deriveSessionKey(priv, peerKey, noncePc, noncePhone);
           channel = new S.SecureChannel(aesKey);
+          // Stash for the pairing step that follows the M2' PONG.
+          openEncryptedChannel._lastChannel = channel;
+          openEncryptedChannel._lastPairSecret = pairSecret;
+          openEncryptedChannel._lastPeerPub = peerPub;
+          openEncryptedChannel._lastWs = ws;
           // Send encrypted PING.
           const ping = new TextEncoder().encode(JSON.stringify({ t: 'PING', ts: Date.now() }));
           const frame = await channel.seal(ping);
@@ -129,8 +139,23 @@
           if (msg.t === 'PONG') {
             const rtt = Date.now() - (msg.echoTs ?? msg.ts ?? Date.now());
             done(true, `encrypted PONG received — RTT ${rtt}ms, M2' channel live 🎉`);
+            // M3'-A: proceed to PIN entry on the same live channel. We do this
+            // here (not in done()) so a future caller of openEncryptedChannel
+            // for other reasons doesn't auto-trigger pairing.
+            await promptAndPair();
+          } else if (msg.t === 'PAIR_OK' || msg.t === 'PAIR_REJECT') {
+            // Re-route to the pairing handler — PAIR_* replies arrive on the
+            // same onmessage. The pairing handler installs its own one-shot
+            // resolver on openEncryptedChannel._pairReplyResolver.
+            const resolver = openEncryptedChannel._pairReplyResolver;
+            if (resolver) {
+              openEncryptedChannel._pairReplyResolver = null;
+              resolver(msg);
+            } else {
+              append(`(unexpected ${msg.t} with no awaiter — dropping)`);
+            }
           } else {
-            done(false, 'unexpected message type: ' + msg.t);
+            append(`(ignoring unexpected msg ${msg.t})`);
           }
         }
       } catch (err) {
@@ -153,6 +178,83 @@
     if (ms < 1000) return `${ms}ms`;
     const s = Math.floor(ms / 1000);
     return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m${s % 60}s`;
+  }
+
+  // ---- M3'-A pairing flow on the already-live encrypted channel ----
+  //
+  // Prompts the user for the 6-digit PIN currently shown on the phone screen,
+  // sends PAIR_REQUEST (encrypted), awaits PAIR_OK / PAIR_REJECT, and on
+  // success posts the device fingerprint + pubkey to /api/lan/devices/trust
+  // so the server persists the TOFU decision.
+  async function promptAndPair() {
+    const S = window.PassManSecure;
+    const channel    = openEncryptedChannel._lastChannel;
+    const pairSecret = openEncryptedChannel._lastPairSecret;
+    const peerPub    = openEncryptedChannel._lastPeerPub;
+    const ws         = openEncryptedChannel._lastWs;
+    if (!channel || !pairSecret || !peerPub || !ws) {
+      append('❌ pairing prereqs missing (channel/pairSecret/peerPub)');
+      return;
+    }
+
+    const pin = window.prompt(
+      'Enter the 6-digit PIN shown on the phone screen.\n' +
+      '(The PIN refreshes every 30 seconds — type whichever value is on screen now.)'
+    );
+    if (!pin) { append('user cancelled PIN entry'); return; }
+    if (!/^\d{6}$/.test(pin)) { append('❌ PIN must be exactly 6 digits'); return; }
+
+    const w = S.pinWindow(Date.now());
+    const req = new TextEncoder().encode(JSON.stringify({ t: 'PAIR_REQUEST', pin, w: Number(w) }));
+    const frame = await channel.seal(req);
+
+    // One-shot resolver for the next PAIR_* reply — the onmessage handler
+    // (above) routes PAIR_OK / PAIR_REJECT here.
+    const reply = await new Promise((resolve) => {
+      openEncryptedChannel._pairReplyResolver = resolve;
+      append(`→ PAIR_REQUEST sent (pin=••••, w=${w})`);
+      ws.send(frame);
+      // 30s ceiling — gives the user time to press TRUST on the phone.
+      setTimeout(() => {
+        if (openEncryptedChannel._pairReplyResolver === resolve) {
+          openEncryptedChannel._pairReplyResolver = null;
+          resolve({ t: 'PAIR_REJECT', reason: 'timeout' });
+        }
+      }, 30000);
+    });
+
+    if (reply.t !== 'PAIR_OK') {
+      append(`❌ pairing rejected: ${reply.reason ?? '(no reason)'}`);
+      return;
+    }
+    append(`✓ PAIR_OK from phone — fingerprint=${reply.fingerprint?.slice(0, 16)}…, label="${reply.label}"`);
+
+    // Sanity check: the fingerprint the phone signed had better match what we
+    // compute from its X25519 pubkey ourselves. If not, something is very wrong
+    // (channel hijack, server bug) and we refuse to persist.
+    const localFp = await S.fingerprintHex(peerPub);
+    if (localFp !== reply.fingerprint) {
+      append(`❌ fingerprint mismatch: phone said ${reply.fingerprint?.slice(0, 16)}… but we derive ${localFp.slice(0, 16)}…`);
+      return;
+    }
+
+    // Persist on the PC — server validates fingerprint matches pubkey again.
+    try {
+      const resp = await fetch('/api/lan/devices/trust', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fingerprint: reply.fingerprint,
+          pubkey_b64: btoa(String.fromCharCode(...peerPub)),
+          label: reply.label,
+        }),
+      });
+      const j = await resp.json();
+      if (j.ok) append(`💾 persisted: status=${j.status}, label="${j.label}"`);
+      else      append(`❌ persistence failed: ${j.error}`);
+    } catch (err) {
+      append(`❌ trust POST failed: ${err?.message ?? err}`);
+    }
   }
 
   window.startLanProbe = startLanProbe;

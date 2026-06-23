@@ -85,6 +85,22 @@ class HotspotServerService : Service() {
         @Volatile var lastError: String? = null
         @Volatile var running: Boolean = false
         @Volatile var startedAtMillis: Long = 0L
+
+        // M3'-A pairing UI surface. Populated when a /socket handshake completes;
+        // cleared when the socket ends. UI polls these to render the rolling
+        // PIN the user types into the PC. A second concurrent socket would
+        // overwrite — acceptable for v0.3 (one user, one phone, one pairing
+        // attempt at a time); the entry reset in handleEncryptedSocket gives
+        // us per-socket isolation of the *approval* gesture which is what
+        // matters for safety.
+        @Volatile var activePairSecret: ByteArray? = null
+        @Volatile var activePeerFingerprint: String? = null
+
+        // True once the user explicitly tapped "trust this PC" in HotspotPairActivity
+        // for the *current* handshake. UI sets this; the WS handler reads it on
+        // PAIR_REQUEST. Reset to false at socket entry AND on successful PAIR_OK
+        // so each trust press is one-shot.
+        @Volatile var userApprovesNext: Boolean = false
     }
 
     private var ktor: ApplicationEngine? = null
@@ -98,11 +114,6 @@ class HotspotServerService : Service() {
     // Stable label phones see in PAIR_OK. Hard-coded for now; M4' UI lets the
     // user rename their phone in the "trusted devices" panel.
     private val phoneLabel: String = android.os.Build.MODEL ?: "PassMan phone"
-
-    // True once the user explicitly tapped "trust this PC" in HotspotPairActivity
-    // for the *current* handshake. UI sets this via setUserApproves(); the
-    // WS handler reads it on PAIR_REQUEST. Reset to false on each new socket.
-    @Volatile var userApprovesNext: Boolean = false
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -181,7 +192,7 @@ class HotspotServerService : Service() {
                     webSocket("/socket") {
                         handleEncryptedSocket(
                             tracker = this@HotspotServerService.pinTracker,
-                            userApproves = { this@HotspotServerService.userApprovesNext },
+                            userApproves = { userApprovesNext },
                             phoneLabel = this@HotspotServerService.phoneLabel,
                         )
                     }
@@ -232,7 +243,7 @@ class HotspotServerService : Service() {
         // PAIR_REQUEST would inherit a yes the user did not give for THIS
         // connection. Race-safe: any concurrent click on the trust button
         // runs on the main thread and would land *after* this reset.
-        this@HotspotServerService.userApprovesNext = false
+        userApprovesNext = false
 
         val kp = Crypto.generateKeypair()
         val noncePhone = Crypto.randomNonce()
@@ -269,6 +280,10 @@ class HotspotServerService : Service() {
                         val derived = Crypto.deriveSessionKey(kp.privateKey, peerPub, noncePc, noncePhone)
                         channel = Crypto.SecureChannel(derived.aesKey)
                         pairSecret = derived.pairSecret
+                        // Surface to UI so it can render the rolling PIN the
+                        // user reads off the phone screen. Cleared in finally{}.
+                        activePairSecret = derived.pairSecret
+                        activePeerFingerprint = Crypto.fingerprintHex(peerPub)
 
                         val welcome = buildJsonObject {
                             put("t", "WELCOME")
@@ -335,6 +350,10 @@ class HotspotServerService : Service() {
             channel?.close()
             // Wipe pair_secret (HKDF derivative — small, but habit).
             pairSecret?.let { java.util.Arrays.fill(it, 0.toByte()) }
+            // Tear down UI-visible state so a disconnected socket doesn't
+            // leave a stale PIN on screen.
+            activePairSecret = null
+            activePeerFingerprint = null
         }
     }
 
@@ -398,7 +417,7 @@ class HotspotServerService : Service() {
         // somehow tries another PAIR_REQUEST, the user has to press trust
         // again. Pairs with the per-socket reset at the top of
         // handleEncryptedSocket() to give one-trust-per-attempt semantics.
-        this@HotspotServerService.userApprovesNext = false
+        userApprovesNext = false
         reply(buildJsonObject {
             put("t", "PAIR_OK")
             put("fingerprint", fingerprint)

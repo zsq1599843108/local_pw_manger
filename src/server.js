@@ -7,6 +7,7 @@ const crypto = require('./crypto');
 const { handshakeHandler: aoapHandshake } = require('./aoap-server');
 const { probeHandler: lanProbe } = require('./lan-server');
 const { openBridge } = require('./lan-ws-client');
+const { installLanDeviceRoutes } = require('./lan-device-routes');
 
 const app = express();
 const server = http.createServer(app);
@@ -101,6 +102,13 @@ async function handleLanSocket(browserWs, params) {
   }
   bridge.attachBrowser(browserWs);
 }
+
+
+// ---- M3'-A pairing persistence (TOFU). Browser, having just decrypted a
+// PAIR_OK frame from the phone, posts the fingerprint + raw pubkey here so the
+// server stamps it into paired_devices. Implementation lives in
+// lan-device-routes.js so tests can mount it onto an in-memory sqlite.
+installLanDeviceRoutes(app, db);
 
 
 app.post('/api/auth/setup', (req, res) => {

@@ -225,6 +225,15 @@ class HotspotServerService : Service() {
         userApproves: () -> Boolean,
         phoneLabel: String,
     ) {
+        // Per-socket reset of the service-level "user pressed trust" flag.
+        // The flag is shared across sockets (one user, one trust button), so
+        // if socket A solicited trust but dropped before sending PAIR_REQUEST,
+        // we must clear stale approval before socket B starts — otherwise B's
+        // PAIR_REQUEST would inherit a yes the user did not give for THIS
+        // connection. Race-safe: any concurrent click on the trust button
+        // runs on the main thread and would land *after* this reset.
+        this@HotspotServerService.userApprovesNext = false
+
         val kp = Crypto.generateKeypair()
         val noncePhone = Crypto.randomNonce()
         var channel: Crypto.SecureChannel? = null
@@ -385,6 +394,11 @@ class HotspotServerService : Service() {
             return
         }
         tracker.reset()
+        // Consume the approval gesture: even if this socket stays alive and
+        // somehow tries another PAIR_REQUEST, the user has to press trust
+        // again. Pairs with the per-socket reset at the top of
+        // handleEncryptedSocket() to give one-trust-per-attempt semantics.
+        this@HotspotServerService.userApprovesNext = false
         reply(buildJsonObject {
             put("t", "PAIR_OK")
             put("fingerprint", fingerprint)

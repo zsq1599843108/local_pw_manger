@@ -88,7 +88,7 @@ object Crypto {
     ): DerivedSecrets {
         val shared = X25519.computeSharedSecret(myPriv, peerPub)
         val salt = noncePc + noncePhone
-        val okm = Hkdf.computeHkdf("SHA256", shared, salt, INFO.toByteArray(), KEY_SIZE * 2)
+        val okm = Hkdf.computeHkdf("HMACSHA256", shared, salt, INFO.toByteArray(), KEY_SIZE * 2)
         return DerivedSecrets(
             aesKey = okm.copyOfRange(0, KEY_SIZE),
             pairSecret = okm.copyOfRange(KEY_SIZE, KEY_SIZE * 2),
@@ -107,7 +107,7 @@ object Crypto {
 
     fun rollingPin(pairSecret: ByteArray, w: Long): String {
         val salt = ByteBuffer.allocate(8).putLong(w).array()
-        val bits = Hkdf.computeHkdf("SHA256", pairSecret, salt, PIN_INFO.toByteArray(), 4)
+        val bits = Hkdf.computeHkdf("HMACSHA256", pairSecret, salt, PIN_INFO.toByteArray(), 4)
         val u32 = ((bits[0].toLong() and 0xFF) shl 24) or
                   ((bits[1].toLong() and 0xFF) shl 16) or
                   ((bits[2].toLong() and 0xFF) shl 8) or

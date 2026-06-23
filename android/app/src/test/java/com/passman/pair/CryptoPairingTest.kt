@@ -44,6 +44,10 @@ class CryptoPairingTest {
         val arr = loadVectors("m3_pairing_vectors.json")
         for (i in 0 until arr.length()) {
             val v = arr.getJSONObject(i)
+            // The vector file mixes rollingPin entries with fingerprint entries
+            // (see fingerprintHex_matches_jsReference below). Skip ones that
+            // aren't rollingPin shape — mirror that test's `has()` guard.
+            if (!v.has("pair_secret_hex")) continue
             val pairSecret = hexToBytes(v.getString("pair_secret_hex"))
             val w = v.getLong("w")
             val expected = v.getString("pin")
@@ -97,10 +101,11 @@ class CryptoPairingTest {
         // but we don't bet on it: skew by enough that the PIN is definitely wrong.
         // Compute the actual PIN, flip a digit, and submit.
         val real = Crypto.rollingPin(secret, w)
-        val tampered = (real.first() + 1).digitToChar().let { c ->
-            (if (c.isDigit()) c else '0') + real.substring(1)
-        }
-        val res = Crypto.verifyPin(tampered, w, secret)
+        // Flip the first digit by +1 mod 10 — pure Char arithmetic, no
+        // digitToChar() (which is Int.digitToChar() in stdlib, not Char.).
+        val c0 = real.first()
+        val c0p = if (c0 == '9') '0' else (c0 + 1)
+        val tampered = c0p + real.substring(1)
         // tampered may rarely collide if the increment lands on another window's
         // PIN; the deterministic check below is safer:
         val pinForW = Crypto.rollingPin(secret, w)

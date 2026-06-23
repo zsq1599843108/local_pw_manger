@@ -4,6 +4,45 @@
 
 ## [Unreleased] — v0.3-dev (Wi-Fi 热点改造，前身 AOAP 已 deprecated)
 
+### Added (2026-06-22, M3'-A Kotlin PAIR handler + 跨语言测试 ✅，分支 `feature/m3-pairing-sync`)
+- 手机端：`Crypto.kt` 加 `PairAttemptTracker`（滑动窗口 5/60s 锁定，@Synchronized 线程安全，镜像 JS `lan-pair-protocol.js`）+ `verifyPin`（±1 窗口容差 + 常量时间字符串比较）
+- 手机端：`HotspotServerService` 加 service-level `pinTracker`（**跨连接共享**）+ `userApprovesNext` 标志位 + `handlePairRequest` 状态机：lockout 检查 → PIN 校验 → 用户确认 → `PAIR_OK`/`PAIR_REJECT`
+- 手机端：`pairSecret` 不再 `@Suppress` 占位，真正喂 `verifyPin`；socket 关闭时 `Arrays.fill(0)` 擦零
+- 测试：`android/app/src/test/java/com/passman/pair/CryptoPairingTest.kt` — 10 个 JVM 用例（rollingPin 跨语言向量 / verifyPin 4 / tracker 4 / fingerprintHex 跨语言向量），与 `CryptoInteropTest.kt` 的 4 个 M2' 互操作用例合计 14 个
+- 测试向量：`m3_pairing_vectors.json`（由 `scripts/gen-m3-pairing-vectors.js` 生成）
+
+### Fixed (2026-06-22, M2' reviewer 必改项 ✅，commit 1988e95，已 merge main @ 2815b08)
+- Blocker：`Crypto.kt SecureChannel` 改用 `javax.crypto.Cipher.getInstance("AES/GCM/NoPadding")` 自控 IV — Tink `AesGcmJce.encrypt()` 自动前置 12B IV 导致 wire 实际是 `iv||ctr||tink_iv||ct||tag`，与 secure.js 不互通
+- 测试盲区补全：`scripts/test-m2-kotlin-bytes.js` 8/8 字节级验证（secure.js seal 与 Node `createCipheriv`/Java Cipher 同 key/iv/aad/pt 产物完全一致）
+- JVM 互操作测试：`android/app/src/test/java/com/passman/pair/CryptoInteropTest.kt` + `m2_interop_vectors.json`
+- 建议项 4 条：`install(WebSockets){maxFrameSize=64KB}` / `close()` 擦密钥 / `SecureRandom` 字段化 / `server.js` host 白名单（RFC1918 + 127/8 + 169.254/16）
+
+### Decision (2026-06-22, M3' 拆分为 A/B/C 三个子里程碑)
+- **M3'-A 配对协议**（本批）：PIN + 指纹 TOFU + paired_devices 持久化 + Kotlin handler + 跨语言测试
+- **M3'-B 主密码挑战**（下一步）：`CHALLENGE/RESPONSE` over established session，APK 复用 `BiometricDemoActivity` 弹 BiometricPrompt，失败兜底 4 位码
+- **M3'-C 全量同步**（再下一步）：`SYNC_PULL/SNAPSHOT/SYNC_PUSH`，last-write-wins，1000 条 < 1s
+- 拆分理由：A/B/C 各自有独立可测边界，分别提审避免一次大 PR
+
+### Decision (2026-06-22, M3'-A PIN 设计：滚动 6 位 TOTP 风格)
+- PIN = HKDF-SHA256(pair_secret, floor(now/30s), info=`passman-pair-pin-v1`) % 1e6，手机端实时刷新 + 倒计时，PC 输入
+- 静态 PIN 攻击窗口无限；滚动后压到 30s，配合 5 次/60s 锁定足够
+- `PAIR_REQUEST` 携带 `w` 字段标 PIN 派生轮次（防时钟漂移导致 false reject）
+
+### Added (2026-06-22, M2' 加密通道首次提交，commit 55a6c45 → 修复后 1988e95)
+- 通用：算法栈 X25519 ECDH → HKDF-SHA256(info=`passman-lan-v1`) → AES-256-GCM；wire frame = `IV(12) || frame_ctr(8) || ct||tag`，AAD = `'PassMan-LAN-v1' || frame_ctr`
+- PC 端：`src/public/js/secure.js` — 浏览器 WebCrypto 完整实现（generateKeypair / deriveSessionKey / SecureChannel.seal/open）+ 独立 send/recv 单调计数器（replay 防御）
+- PC 端：`src/lan-ws-client.js` — Node 「哑字节桥」: 浏览器 ws ↔ 手机 ws 双向转发，**不持有任何密钥**
+- PC 端：`src/server.js` 加 `/api/lan/socket` WS upgrade 路由，扣到 bridge
+- PC 端：`src/public/js/lan-pair.js` probe 成功后自动打 HELLO + 加密 PING，UI 显示 RTT
+- 手机端：`android/.../Crypto.kt` — Tink 镜像（AesGcmJce + Hkdf + X25519），与 secure.js 字节兼容
+- 手机端：`HotspotServerService.kt` 加 Ktor `/socket` WebSocket 路由 + 握手 FSM（AWAIT_HELLO → ACTIVE）
+- 依赖：npm `ws@^8.21.0`，Gradle `ktor-server-websockets:2.3.13` + `tink-android:1.13.0`
+
+### Tested (2026-06-22, M2' 首次提交时的离线测试)
+- `scripts/test-m2-encrypted-channel.js`：Node mock-phone（WebCrypto）经真 bridge 跑真 secure.js，4/4 通过（握手 / PING-PONG / GCM tamper / replay）
+- ⚠️ 此测试因 mock-phone 用 Node WebCrypto 不走 Kotlin 路径，漏检了 Tink IV 前置 bug；修复后由 `test-m2-kotlin-bytes.js` + JVM 互操作测试补上
+- Node 24 `subtle` shim：`{name:'ECDH', namedCurve:'X25519'}` ↔ `{name:'X25519'}` 双向转换
+
 ### Added (2026-06-19, M1' Wi-Fi PoC 实测通过 ✅)
 - 手机端：`HotspotServerService.kt` — 前台服务跑 Ktor CIO server，监听 `0.0.0.0:9876`，路由 `GET /ping → JSON{app,ver,time,uptimeMs}`
 - 手机端：`HotspotPairActivity.kt` — Start/Stop 按钮 + 实时 IPv4 列表 + 1Hz 状态轮询，跳系统 tethering 设置入口

@@ -4,7 +4,8 @@
 
 ## 🔥 In Progress
 
-- [ ] M2' — 加密通道 (X25519 + HKDF + AES-GCM over WebSocket，详见 `docs/wifi-hotspot-roadmap.md` §M2'，~1 天)
+- [ ] **M3'-A — 配对协议**（分支 `feature/m3-pairing-sync` @ 6501b83，rebase 到 main；Kotlin PAIR handler + 跨语言 JVM 测试已 push，等 reviewer 复审）
+- [x] **M2' — reviewer 必改项**（commit 1988e95，已 merge main @ 2815b08）
 
 ## ⏭️ Next（v0.3 — Wi-Fi 热点改造，覆盖 AOAP）
 
@@ -24,17 +25,37 @@
 - [x] PC：phone.html 绿色「Pair via Wi-Fi」入口
 - [x] 联调：小米 14 Pro + Win11 实测 ping/pong 通
 
-### M2' — 加密通道（沿用原 M2 设计 ~1 天）
-- [ ] PC: `secure.js` X25519 + HKDF + AES-GCM
-- [ ] APK: Tink 镜像同算法
-- [ ] WebSocket 升级（替代裸 HTTP）
-- [ ] PING/PONG over encrypted channel
+### M2' — 加密通道（~1 天） ⚠️ 待修复（reviewer 否决，Tink AesGcmJce IV 前置 bug）
+- [x] PC: `secure.js` X25519 + HKDF + AES-GCM
+- [x] APK: `Crypto.kt` Tink 镜像同算法 **→ 需改用 `javax.crypto.Cipher`**
+- [x] WebSocket 升级（Ktor `/socket` + Node `lan-ws-client.js` 哑桥）
+- [x] PING/PONG over encrypted channel（离线 4/4 通过，但 mock-phone 不走 Kotlin）
+- [ ] **修复：Kotlin 改用 `javax.crypto.Cipher` 自控 IV**（必改 1）
+- [ ] **修复：加 JVM 互操作测试验证 Kotlin ↔ JS 字节互通**（必改 2）
+- [ ] 建议项：maxFrameSize / close() 擦密钥 / SecureRandom 字段化 / host 白名单
 
-### M3' — 应用层（沿用原 M3 ~1.5 天）
-- [ ] 配对：PIN 校验 + 公钥指纹 TOFU
-- [ ] paired_devices 表 + migration
-- [ ] 主密码挑战（**用上 BiometricPrompt**）
-- [ ] 全量同步
+### M3'-A — 配对（PIN + 指纹 TOFU + paired_devices，~2.5h）🟡 等 reviewer 复审
+- [x] DB schema：`paired_devices(fingerprint PK, label, pubkey, trusted_at, last_seen)` + migration
+- [x] `secure.js` / `Crypto.kt` 加 `fingerprintHex(pubBytes)`（SHA-256 64 hex，4-4-4 分组显示前 32 字符）
+- [x] 手机端**滚动 PIN**（6 位，30s 窗口，HKDF(pair_secret, floor(now/30s)) → 6 位 mod 1e6）
+- [x] 加密通道消息层扩展：`PAIR_REQUEST {pin, w}` / `PAIR_OK {fingerprint, label}` / `PAIR_REJECT {reason}`
+- [x] 锁定：5 次错 / 60s 窗口（in-memory `PairAttemptTracker`，service 重启清零）
+- [x] Kotlin handler 接到 `/socket` 路由（`handlePairRequest` 状态机）
+- [x] 跨语言 JVM 测试：`CryptoPairingTest.kt`（rollingPin 18 向量 / verifyPin / tracker / fingerprintHex）
+- [ ] APK 持久化：`androidx.security:security-crypto` + `TrustStore.kt`（M3'-A 收尾或 M4' 做）
+- [ ] APK UI：`HotspotPairActivity` 显示滚动 PIN + 用户确认按钮接 `userApprovesNext`（M3'-A 收尾或 M4' 做）
+- [ ] PC UI：`lan-pair.js` 接 PIN 输入框流程（M3'-A 收尾或 M4' 做）
+
+### M3'-B — 主密码挑战（生物识别，~2.5h）
+- [ ] 加密帧 `CHALLENGE {nonce32}` / `RESPONSE {sig}` over established session
+- [ ] APK 复用 `BiometricDemoActivity` 模式弹 BiometricPrompt
+- [ ] 失败兜底回 4 位码（v0.2 路径已在 aoap-server.js）
+
+### M3'-C — 全量同步（~3h）
+- [ ] PC `/api/sync/snapshot` 返回已加密密码列表（不解密）
+- [ ] 加密帧 `SYNC_PULL` / `SNAPSHOT {items[]}` / `SYNC_PUSH {items[]}`
+- [ ] 冲突策略：updated_at 较新者赢，写 schema_version
+- [ ] 1000 条 < 1s 性能测试
 
 ### M4' — UI + 持久化（沿用原 M4 ~1 天）
 - [ ] phone.html 重做：引导 / 配对 / 已信任设备

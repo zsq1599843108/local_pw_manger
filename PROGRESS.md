@@ -2,43 +2,36 @@
 
 > Claude 进入项目时**第一个读这个文件**。每次离开前必须更新「上次离开时停在哪」和「下次回来要做的」。
 
-**last update**: 2026-06-19（M1' Wi-Fi PoC 实测通过 ✅）
+**last update**: 2026-06-22（M2' 已 merge main ✅；m3 rebase 到 main；M3' 拆 A/B/C；等复审 M3'-A）
 
 ## 🎯 当前阶段
 
 正在做：**v0.3 — Wi-Fi 热点改造**
-- v0.3 整体进度：~50%
-- M1' 进度：**✅ 完成**（小米 14 Pro + Win11 实测 ping/pong 跑通）
-- 下个里程碑：**M2'**（加密通道，~1 天）
+- v0.3 整体进度：~70%
+- M2' 进度：**✅ 已 merge main**（commit 2815b08，含 reviewer 必改修复 1988e95）
+- M3' 拆分：**M3'-A 配对 / M3'-B 生物识别挑战 / M3'-C 全量同步**（详见 CHANGELOG 2026-06-22 Decision）
+- M3'-A 进度：**🟡 等 reviewer 复审**（Kotlin PAIR handler + 跨语言 JVM 测试已 push，commit 6501b83）
+- 下个里程碑：**M3'-A 复审通过 → merge → 开 M3'-B**
 
 ## 📍 上次离开时停在哪
 
-- **里程碑**：M1' 实测通过 — Win11 Chrome 通过 PC server-side proxy 拉手机 Ktor `/ping` 1 秒内回 pong
+- **里程碑**：m3 rebase 到 main (2815b08)，修了 `CryptoInteropTest.kt` import，PROGRESS/CHANGELOG 标了 A/B/C 拆分
 - **代码状态**：
-  - APK：`HotspotServerService` (Ktor CIO :9876) + `HotspotPairActivity` (UI/状态/IP 列表)
-  - PC：`src/lan-server.js` (probe + 错误码) + `/api/lan/probe` 路由 + `lan-pair.js` (浏览器按钮)
-  - 关键 fix：API 34+ 必须加 `CHANGE_WIFI_STATE` 才能启 `connectedDevice` 前台服务
-- **测试状态**：
-  - ✅ phone server 启停稳定
-  - ✅ PC 切 Wi-Fi 加入手机热点后 probe 通
-  - ✅ pong 含 app/ver/time/uptime，PC 端时钟漂移可视
-- **git working tree**：M1' 完成代码 + 文档同步待 commit
+  - `main` @ 2815b08 — 含 M2' 全套（加密通道 + 修复 + 互操作测试 + host 白名单）
+  - `feature/m3-pairing-sync` @ 6501b83 — rebase 到 main，Kotlin PAIR handler 全接，跨语言测试向量齐
+- **git 状态**：
+  - m3 force-push 完成（祖先从 411ff39 变为 6501b83）
+  - 等 reviewer 复审 → 通过则 merge → main
 
 ## ⏭️ 下次回来要做的
 
-**M2' — 加密通道（~1 天，详见 `docs/wifi-hotspot-roadmap.md` §M2'）**
-
-实施前必做：
-- [ ] 跑 `/install-deps` 询问 npm `ws` 包安装方式
-- [ ] 跑 `/install-deps` 询问手机端 Tink 依赖安装方式
-- [ ] 决定：WebSocket 路由是否用 wss（自签证书）还是先 ws 裸跑（安全靠 AES-GCM 不靠 TLS）
-
-代码大致：
-1. APK：加 `io.ktor:ktor-server-websockets` + `tink-android` 依赖
-2. APK：`Crypto.kt` (X25519 + HKDF + AES-GCM) + `HotspotServerService` 加 `WEBSOCKET /socket` 路由
-3. PC：`src/public/js/secure.js` (WebCrypto subtle 同算法栈)
-4. PC：`src/lan-server.js` 加 WebSocket client（npm `ws`）
-5. 联调：PC 发 PING 加密帧 → 手机回 PONG，往返 < 50ms
+**M3'-A 复审通过后**：
+1. merge `feature/m3-pairing-sync` → main
+2. 开 M3'-B：`CHALLENGE/RESPONSE` over established session
+   - APK 复用 `BiometricDemoActivity` 模式弹 BiometricPrompt
+   - PC 发 `CHALLENGE {nonce32}`，手机签 `RESPONSE {sig}`（用首次配对生成的设备私钥）
+   - 失败兜底回 4 位码（v0.2 路径已在 aoap-server.js）
+3. M3'-C：全量同步 `SYNC_PULL/SNAPSHOT/SYNC_PUSH`，last-write-wins
 
 ## 🚧 阻塞 / 待解决
 
@@ -63,6 +56,14 @@
   - APK 用 Ktor CIO 起 server :9876，PC 通过 `/api/lan/probe` 代理拉 `/ping`
   - 关键坑：API 34+ FGS connectedDevice 需 CHANGE_WIFI_STATE 兜底权限
   - ping/pong 跨 Wi-Fi 热点 LAN 往返 ~50ms，AOAP 死路彻底绕开
+- 2026-06-22: **M2' 加密通道首次提交**（commit 55a6c45）
+  - 算法栈：X25519 ECDH → HKDF-SHA256 → AES-256-GCM
+  - ⚠️ **2026-06-22 reviewer 否决**：手机端 Tink `AesGcmJce.encrypt()` 会自动前置 12B IV，wire 实际是 `iv || ctr || tink_iv || ct || tag`
+- 2026-06-22: **M2' 必改项修完**（commit 1988e95）
+  - Kotlin 改 `javax.crypto.Cipher` 自控 IV；加 JVM 互操作测试 + Node 字节等价验证（8/8）
+  - 建议项 4 条：maxFrameSize 64KB / close() 擦密钥 / SecureRandom 字段化 / host 白名单
+- 2026-06-22: **M3' reviewer 标记 2 blocker**：Kotlin PAIR handler + 跨语言测试
+- 2026-06-22: **m3 rebase 到 1988e95**，开补 Kotlin PAIR handler
 
 ## 🔗 关键文档跳转
 

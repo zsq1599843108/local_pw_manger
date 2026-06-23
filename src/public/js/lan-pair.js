@@ -114,8 +114,8 @@
           const { pubBytes: peerPub, noncePhone } = S.parseWelcome(ev.data);
           append('← WELCOME: phone pubkey received, deriving session_key');
           const peerKey = await S.importPeerPub(peerPub);
-          const key = await S.deriveSessionKey(priv, peerKey, noncePc, noncePhone);
-          channel = new S.SecureChannel(key);
+          const { aesKey } = await S.deriveSessionKey(priv, peerKey, noncePc, noncePhone);
+          channel = new S.SecureChannel(aesKey);
           // Send encrypted PING.
           const ping = new TextEncoder().encode(JSON.stringify({ t: 'PING', ts: Date.now() }));
           const frame = await channel.seal(ping);

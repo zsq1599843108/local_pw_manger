@@ -27,10 +27,10 @@
 
 **M3'-A 复审通过后**：
 1. merge `feature/m3-pairing-sync` → main
-2. 开 M3'-B：`CHALLENGE/RESPONSE` over established session
-   - APK 复用 `BiometricDemoActivity` 模式弹 BiometricPrompt
-   - PC 发 `CHALLENGE {nonce32}`，手机签 `RESPONSE {sig}`（用首次配对生成的设备私钥）
-   - 失败兜底回 4 位码（v0.2 路径已在 aoap-server.js）
+2. 开 M3'-B：`CHALLENGE/RESPONSE` over established session（**设计稿已就位**：`docs/m3b-biometric-challenge-design.md`）
+   - 决策：方案 B — Android Keystore HMAC + bio gate（TEE 担保 biometric_ok）
+   - PAIR_OK 帧扩展 `device_hmac_key_b64` + db schema v4
+   - 失败兜底回 4 位码（v0.2 路径已在 aoap-server.js）+ fallback 路径下禁用高敏 purpose
 3. M3'-C：全量同步 `SYNC_PULL/SNAPSHOT/SYNC_PUSH`，last-write-wins
 
 ## 🚧 阻塞 / 待解决
@@ -74,5 +74,6 @@
 - **现行决策** → `docs/adr-002-wifi-hotspot.md` ✅
 - **现行设计** → `docs/wifi-hotspot-design.md` ✅
 - **现行路线图** → `docs/wifi-hotspot-roadmap.md` ✅
+- **M3'-B 设计草案（待 M3'-A merge 后实施）** → `docs/m3b-biometric-challenge-design.md` 📝
 - 文件地图 → `MEMORY.md`
 - 任务清单 → `TODO.md`

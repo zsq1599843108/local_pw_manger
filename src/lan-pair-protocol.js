@@ -101,6 +101,25 @@ class PairAttemptTracker {
 }
 
 /**
+ * Constant-time string equality. Returns true iff `a` and `b` have the same
+ * length and the same bytes; runs in O(len) regardless of where (or whether)
+ * they differ. Mirrors Crypto.kt#constantTimeEquals so PC and phone behave
+ * identically under timing analysis.
+ *
+ * Only suitable for short inputs of comparable length — for a 6-digit PIN
+ * that's a 6-iteration loop, vanishingly cheap.
+ */
+function constantTimeEquals(a, b) {
+  if (typeof a !== 'string' || typeof b !== 'string') return false;
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) {
+    diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return diff === 0;
+}
+
+/**
  * Decide whether a submitted PIN is accepted for window `submittedW`, by
  * comparing against the PINs the *phone* would have computed for windows
  * w-1, w, w+1 (one window of skew slack on each side = ±30s ≤ ±45s, which
@@ -112,15 +131,25 @@ class PairAttemptTracker {
  * Both `submittedW` and the windows passed to pinForWindow are BigInt so
  * the call site doesn't lose precision past 2^53/30000 ms (~2873 years —
  * not really an issue but we follow secure.js's convention).
+ *
+ * Comparison is constant-time per candidate (see constantTimeEquals); the
+ * outer loop still runs all `2*skew+1` iterations even on match so the
+ * decision time leaks at most "did it match at all", not "which window".
  */
 async function verifyPin({ submittedPin, submittedW, pinForWindow, skew = 1 }) {
   const sw = BigInt(submittedW);
+  let matchedW = null;
   for (let off = -skew; off <= skew; off++) {
     const w = sw + BigInt(off);
     const expected = await pinForWindow(w);
-    if (expected === submittedPin) return { ok: true, matchedW: w };
+    // Run every iteration even after a match: keeps the loop count constant
+    // regardless of where (or whether) the hit is, and `constantTimeEquals`
+    // keeps each comparison constant-time too.
+    if (constantTimeEquals(expected, submittedPin) && matchedW === null) {
+      matchedW = w;
+    }
   }
-  return { ok: false };
+  return matchedW === null ? { ok: false } : { ok: true, matchedW };
 }
 
 module.exports = {
@@ -128,4 +157,5 @@ module.exports = {
   encode, decode,
   PairAttemptTracker,
   verifyPin,
+  constantTimeEquals,
 };

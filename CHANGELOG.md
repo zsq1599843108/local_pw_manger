@@ -8,7 +8,7 @@
 - 手机端：`Crypto.kt` 加 `PairAttemptTracker`（滑动窗口 5/60s 锁定，@Synchronized 线程安全，镜像 JS `lan-pair-protocol.js`）+ `verifyPin`（±1 窗口容差 + 常量时间字符串比较）
 - 手机端：`HotspotServerService` 加 service-level `pinTracker`（**跨连接共享**）+ `userApprovesNext` 标志位 + `handlePairRequest` 状态机：lockout 检查 → PIN 校验 → 用户确认 → `PAIR_OK`/`PAIR_REJECT`
 - 手机端：`pairSecret` 不再 `@Suppress` 占位，真正喂 `verifyPin`；socket 关闭时 `Arrays.fill(0)` 擦零
-- 测试：`android/app/src/test/java/com/passman/pair/CryptoPairingTest.kt` — 12 个 JVM 用例（rollingPin 18 向量 / verifyPin 4 / tracker 4 / fingerprintHex 3）
+- 测试：`android/app/src/test/java/com/passman/pair/CryptoPairingTest.kt` — 10 个 JVM 用例（rollingPin 跨语言向量 / verifyPin 4 / tracker 4 / fingerprintHex 跨语言向量），与 `CryptoInteropTest.kt` 的 4 个 M2' 互操作用例合计 14 个
 - 测试向量：`m3_pairing_vectors.json`（由 `scripts/gen-m3-pairing-vectors.js` 生成）
 
 ### Fixed (2026-06-22, M2' reviewer 必改项 ✅，commit 1988e95，已 merge main @ 2815b08)

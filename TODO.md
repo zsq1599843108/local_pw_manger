@@ -4,8 +4,8 @@
 
 ## 🔥 In Progress
 
-- [ ] **M3'-A — 配对协议**（分支 `feature/m3-pairing-sync` @ 6501b83，rebase 到 main；Kotlin PAIR handler + 跨语言 JVM 测试已 push，等 reviewer 复审）
-- [x] **M2' — reviewer 必改项**（commit 1988e95，已 merge main @ 2815b08）
+- [ ] **🔴 reviewer B-2 must-fix（明天第一件）**：`android/app/build.gradle.kts:16` `minSdk = 21` → **`30`**（API 30 的 setUserAuthenticationParameters/AUTH_BIOMETRIC_STRONG 无守卫，lint error + 低版本 NoSuchMethodError）
+- [ ] **M3'-B — 生物识别挑战**（分支 `feature/m3b-biometric-challenge` @ 617f754，未 push；B-1/B-2/B-3 done，B-4~B-7 待做）
 
 ## ⏭️ Next（v0.3 — Wi-Fi 热点改造，覆盖 AOAP）
 
@@ -48,10 +48,18 @@
 - [x] PC 端 `/api/lan/devices/*` REST 端点（trust/list/revoke）+ 24 个路由集成测试（commit 2481867）
 - [x] `userApprovesNext` per-socket reset + PAIR_OK 后消费（commit 1235c73）
 
-### M3'-B — 主密码挑战（生物识别，~2.5h）
-- [ ] 加密帧 `CHALLENGE {nonce32}` / `RESPONSE {sig}` over established session
-- [ ] APK 复用 `BiometricDemoActivity` 模式弹 BiometricPrompt
-- [ ] 失败兜底回 4 位码（v0.2 路径已在 aoap-server.js）
+### M3'-B — 主密码挑战（生物识别）分支 `feature/m3b-biometric-challenge`
+设计稿：`docs/m3b-biometric-challenge-design.md`（§14 拆 B-1~B-7）
+- [x] **B-1** @ 074500a — PAIR_OK 扩展 `device_hmac_key_b64`/`biometric_capable` + db schema v4（device_hmac_key/last_challenge_at/last_fallback_at）+ 两端单测（db 27/routes 34/pairing 19 全绿）
+- [x] **B-2** @ 06489e4 — `Crypto.kt` 字节级 `buildChallengeAad` + Keystore 助手（**导入**而非 generateKey，偏离 §5 已记决策）+ `BiometricChallengeSigner` + Node 向量生成器自检 6/6（reviewer ⚠️通过 + 1 must-fix）
+- [x] **B-3** @ 617f754 — `HotspotServerService.handleChallenge` dispatcher + `ChallengeBridge` + 透明 `ChallengePromptActivity` + manifest/theme
+- [ ] **reviewer B-2 待办**（清理）：#2 过时注释（service 顶部 TODO(B-2)）/ #3 文档 §4「15B」§5「import」/ #4 catch 窄化到 StrongBoxUnavailableException
+- [ ] **B-4** — PC 端 `src/lan-challenge.js`（verify hmac/ts/nonce/purpose/fingerprint）+ `src/public/js/challenge-ui.js` + Node 测试
+- [ ] **B-5** — fallback 4 位 PIN + 24h lockout（**先确认 §7 双副本方案**）+ reviewer 待办 #1（EncryptedSharedPreferences 持久化，作 PAIR_OK 下发 + fallback 计算同一来源）
+- [ ] **B-6** — 跨语言测试向量 JVM 互验（消费 `android/app/src/test/resources/m3b_challenge_vectors.json`）
+- [ ] **B-7** — 风险登记 + CHANGELOG + 真机实测（指纹注册变更 / StrongBox 缺失降级 / Android 12+ 后台拉 Activity）
+
+⚠️ 已知依赖（非 B 缺陷）：M3'-A 每连接重生 keypair → CHALLENGE 仅同连接 Keystore 命中（持久身份 M4'）；Service 后台拉 prompt Activity 受 Android 12+ 限，依赖交互前台豁免
 
 ### M3'-C — 全量同步（~3h）
 - [ ] PC `/api/sync/snapshot` 返回已加密密码列表（不解密）

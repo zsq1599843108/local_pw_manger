@@ -105,6 +105,9 @@ function startMockPhone({ port, tracker, userApproves = true, label = 'Mock Mi 1
         let sendCtr = 0n;
         let pairSecret = null;
         const fingerprintHex = await S.fingerprintHex(pubBytes);
+        // M3'-B: a per-connection 32B HMAC key the phone hands to the PC in
+        // PAIR_OK (mirrors HotspotServerService.deviceHmacKeyB64()).
+        const hmacKey = wc.getRandomValues(new Uint8Array(32));
 
         async function sealAndSend(obj) {
           const pt = encode(obj);
@@ -180,6 +183,9 @@ function startMockPhone({ port, tracker, userApproves = true, label = 'Mock Mi 1
                   t: MSG.PAIR_OK,
                   fingerprint: fingerprintHex,
                   label,
+                  // M3'-B: phone hands the PC a 32B HMAC key + biometric snapshot.
+                  device_hmac_key_b64: S.b64encode(hmacKey),
+                  biometric_capable: true,
                 });
               }
             }
@@ -270,6 +276,11 @@ async function runPairAttempt({ port, pinOverride, windowOverride }) {
     ok('correct PIN -> PAIR_OK', r.ok === true, JSON.stringify(r.payload));
     ok('  PAIR_OK includes fingerprint (64 hex)', r.ok && /^[0-9A-F]{64}$/.test(r.payload.fingerprint || ''));
     ok('  PAIR_OK includes label', r.ok && typeof r.payload.label === 'string' && r.payload.label.length > 0);
+    // M3'-B: PAIR_OK carries a 32B HMAC key + biometric_capable flag.
+    ok('  PAIR_OK includes 32B device_hmac_key_b64',
+      r.ok && typeof r.payload.device_hmac_key_b64 === 'string' &&
+      Buffer.from(r.payload.device_hmac_key_b64, 'base64').length === 32);
+    ok('  PAIR_OK includes biometric_capable bool', r.ok && typeof r.payload.biometric_capable === 'boolean');
     wss.close();
   }
 

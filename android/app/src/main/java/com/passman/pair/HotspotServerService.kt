@@ -11,7 +11,9 @@ import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
+import android.util.Base64
 import android.util.Log
+import androidx.biometric.BiometricManager
 import io.ktor.serialization.kotlinx.json.json
 import io.ktor.server.application.call
 import io.ktor.server.application.install
@@ -37,6 +39,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.long
 import kotlinx.serialization.json.put
+import java.security.SecureRandom
 
 /**
  * M1' (ADR-002) — foreground service running a Ktor CIO server on :9876.
@@ -114,6 +117,34 @@ class HotspotServerService : Service() {
     // Stable label phones see in PAIR_OK. Hard-coded for now; M4' UI lets the
     // user rename their phone in the "trusted devices" panel.
     private val phoneLabel: String = android.os.Build.MODEL ?: "PassMan phone"
+
+    // M3'-B B-1: per-device HMAC key for biometric CHALLENGE, handed to the PC
+    // once inside the encrypted PAIR_OK frame (design §8). We mint it lazily and
+    // cache it for this service lifetime.
+    //
+    // TODO(B-2): replace this in-memory mint with AndroidKeyStore enrollment —
+    // a PURPOSE_SIGN HMAC key with setUserAuthenticationRequired(true) plus a
+    // no-bio-gate EncryptedSharedPreferences mirror for the fallback path. Until
+    // then the key is NOT persisted on the phone, so a service restart forces a
+    // re-ENROLL on the next connection (design §9 handles this gracefully).
+    @Volatile private var deviceHmacKey: ByteArray? = null
+    private val secureRandom = SecureRandom()
+
+    /** 32B HMAC key as base64 (NO_WRAP), minted once per service lifetime. */
+    @Synchronized
+    private fun deviceHmacKeyB64(): String {
+        val key = deviceHmacKey ?: ByteArray(32).also {
+            secureRandom.nextBytes(it)
+            deviceHmacKey = it
+        }
+        return Base64.encodeToString(key, Base64.NO_WRAP)
+    }
+
+    /** Snapshot of whether strong (Class 3) biometrics are usable right now. */
+    private fun biometricCapable(): Boolean =
+        BiometricManager.from(this)
+            .canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_STRONG) ==
+            BiometricManager.BIOMETRIC_SUCCESS
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -422,6 +453,11 @@ class HotspotServerService : Service() {
             put("t", "PAIR_OK")
             put("fingerprint", fingerprint)
             put("label", phoneLabel)
+            // M3'-B: hand the PC the per-device HMAC key + a snapshot of whether
+            // this phone can do strong biometrics, so it knows whether to offer
+            // biometric CHALLENGE later (design §8/§9).
+            put("device_hmac_key_b64", deviceHmacKeyB64())
+            put("biometric_capable", biometricCapable())
         })
         Log.i(TAG, "WS /socket: PAIR_OK to PC, fingerprint=${fingerprint.take(16)}…")
     }

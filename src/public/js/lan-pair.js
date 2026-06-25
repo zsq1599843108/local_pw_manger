@@ -229,6 +229,26 @@
     }
     append(`✓ PAIR_OK from phone — fingerprint=${reply.fingerprint?.slice(0, 16)}…, label="${reply.label}"`);
 
+    // M3'-B: the phone may carry its biometric HMAC key in PAIR_OK. Validate
+    // it is exactly 32 bytes before forwarding; a malformed value is dropped
+    // (logged) rather than passed on, so the device just pairs without a key
+    // and back-fills later via ENROLL_HMAC (design §9).
+    let hmacKeyB64;
+    if (typeof reply.device_hmac_key_b64 === 'string') {
+      const ok32 = (() => {
+        try { return atob(reply.device_hmac_key_b64).length === 32; }
+        catch (_) { return false; }
+      })();
+      if (ok32) {
+        hmacKeyB64 = reply.device_hmac_key_b64;
+        append(`🔑 device HMAC key received (biometric_capable=${reply.biometric_capable === true})`);
+      } else {
+        append('⚠️ PAIR_OK device_hmac_key_b64 malformed — pairing without it');
+      }
+    } else {
+      append('ℹ️ phone sent no HMAC key — biometric challenge unavailable until ENROLL');
+    }
+
     // Sanity check: the fingerprint the phone signed had better match what we
     // compute from its X25519 pubkey ourselves. If not, something is very wrong
     // (channel hijack, server bug) and we refuse to persist.
@@ -247,6 +267,7 @@
           fingerprint: reply.fingerprint,
           pubkey_b64: btoa(String.fromCharCode(...peerPub)),
           label: reply.label,
+          ...(hmacKeyB64 ? { device_hmac_key_b64: hmacKeyB64 } : {}),
         }),
       });
       const j = await resp.json();

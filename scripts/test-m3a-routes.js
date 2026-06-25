@@ -19,7 +19,10 @@ function freshDb() {
       label       TEXT NOT NULL,
       pubkey      BLOB NOT NULL,
       trusted_at  INTEGER NOT NULL,
-      last_seen   INTEGER NOT NULL
+      last_seen   INTEGER NOT NULL,
+      device_hmac_key   BLOB,
+      last_challenge_at INTEGER,
+      last_fallback_at  INTEGER
     );
   `);
   return db;
@@ -144,11 +147,83 @@ async function main() {
   ok('POST /trust empty label -> 200', r.status === 200);
   ok('  default label applied', body.label === 'Unnamed device');
 
-  // ---- GET /devices lists both ----
+  // ---- (M3'-B) dev1 was trusted without a key -> stored NULL ----
+  {
+    const row = db.prepare(`SELECT device_hmac_key FROM paired_devices WHERE fingerprint=?`).get(dev1.fingerprint);
+    ok('device trusted without key -> device_hmac_key NULL', row && row.device_hmac_key == null);
+  }
+
+  // ---- (M3'-B) POST /trust with a valid 32B device_hmac_key_b64 ----
+  const dev3 = makeDevice(0x30);
+  const hmacKey = Buffer.alloc(32, 0x5a);
+  r = await fetch(`${base}/api/lan/devices/trust`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      fingerprint: dev3.fingerprint,
+      pubkey_b64: dev3.pubkey.toString('base64'),
+      label: 'Pixel 8',
+      device_hmac_key_b64: hmacKey.toString('base64'),
+    }),
+  });
+  body = await r.json();
+  ok('POST /trust with hmac key -> 200 trusted', r.status === 200 && body.status === 'trusted');
+  {
+    const row = db.prepare(`SELECT device_hmac_key FROM paired_devices WHERE fingerprint=?`).get(dev3.fingerprint);
+    ok('  device_hmac_key persisted 32 bytes', row && Buffer.compare(row.device_hmac_key, hmacKey) === 0);
+  }
+
+  // ---- (M3'-B) malformed device_hmac_key_b64 (wrong length) -> 400 ----
+  const dev4 = makeDevice(0x40);
+  r = await fetch(`${base}/api/lan/devices/trust`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      fingerprint: dev4.fingerprint,
+      pubkey_b64: dev4.pubkey.toString('base64'),
+      label: 'bad key',
+      device_hmac_key_b64: Buffer.alloc(16).toString('base64'),  // 16B != 32B
+    }),
+  });
+  body = await r.json();
+  ok('POST /trust malformed hmac key -> 400', r.status === 400);
+  ok('  error=bad_hmac_key', body.error === 'bad_hmac_key');
+  ok('  malformed-key device was NOT persisted',
+    !db.prepare(`SELECT 1 FROM paired_devices WHERE fingerprint=?`).get(dev4.fingerprint));
+
+  // ---- (M3'-B) re-trust dev1 WITH a key back-fills the NULL ----
+  const backfillKey = Buffer.alloc(32, 0x77);
+  r = await fetch(`${base}/api/lan/devices/trust`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      fingerprint: dev1.fingerprint,
+      pubkey_b64: dev1.pubkey.toString('base64'),
+      label: 'ignored on re-trust',
+      device_hmac_key_b64: backfillKey.toString('base64'),
+    }),
+  });
+  body = await r.json();
+  ok('re-trust dev1 with key -> already_trusted', r.status === 200 && body.status === 'already_trusted');
+  {
+    const row = db.prepare(`SELECT device_hmac_key FROM paired_devices WHERE fingerprint=?`).get(dev1.fingerprint);
+    ok('  NULL key back-filled on re-trust', row && Buffer.compare(row.device_hmac_key, backfillKey) === 0);
+  }
+
+  // ---- (M3'-B) GET /devices surfaces has_hmac_key without leaking bytes ----
+  r = await fetch(`${base}/api/lan/devices`);
+  body = await r.json();
+  {
+    const d3 = body.devices.find((d) => d.fingerprint === dev3.fingerprint);
+    ok('GET /devices: keyed device reports has_hmac_key=true', d3 && d3.has_hmac_key === true);
+    ok('  no device_hmac_key bytes leaked', body.devices.every((d) => d.device_hmac_key === undefined));
+  }
+
+  // ---- GET /devices lists all trusted ----
   r = await fetch(`${base}/api/lan/devices`);
   body = await r.json();
   ok('GET /devices -> 200', r.status === 200);
-  ok('  returns 2 devices', body.devices.length === 2);
+  ok('  returns 3 devices', body.devices.length === 3);
   ok('  no pubkey leaked in list', body.devices.every((d) => d.pubkey === undefined));
 
   // ---- DELETE /devices/:fp removes ----
@@ -159,8 +234,8 @@ async function main() {
 
   r = await fetch(`${base}/api/lan/devices`);
   body = await r.json();
-  ok('after DELETE, GET shows 1 device', body.devices.length === 1);
-  ok('  the remaining one is dev2', body.devices[0].fingerprint === dev2.fingerprint);
+  ok('after DELETE, GET shows 2 devices', body.devices.length === 2);
+  ok('  dev1 is gone', body.devices.every((d) => d.fingerprint !== dev1.fingerprint));
 
   // ---- DELETE missing fp is a no-op ----
   r = await fetch(`${base}/api/lan/devices/${dev1.fingerprint}`, { method: 'DELETE' });

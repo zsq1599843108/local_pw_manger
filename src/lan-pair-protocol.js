@@ -10,9 +10,15 @@
 //                     PC -> phone, asking to be trusted. `w` is the rolling
 //                     window the PC computed the PIN for (so the phone can
 //                     try w, w-1, w+1 to mask clock skew within ±30s).
-//   PAIR_OK         { t:'PAIR_OK', fingerprint, label }
+//   PAIR_OK         { t:'PAIR_OK', fingerprint, label,
+//                      device_hmac_key_b64?, biometric_capable? }
 //                     phone -> PC, sent only after the user pressed "trust" on
-//                     the phone AND the PIN matched.
+//                     the phone AND the PIN matched. M3'-B adds an optional 32B
+//                     base64 `device_hmac_key_b64` (the phone-generated HMAC key
+//                     for biometric CHALLENGE) and `biometric_capable` (a
+//                     snapshot of BiometricManager.canAuthenticate). Older
+//                     phones omit both; the PC persists NULL and back-fills via
+//                     ENROLL_HMAC later (design §9).
 //   PAIR_REJECT     { t:'PAIR_REJECT', reason: 'bad_pin'|'locked'|'user_denied'|'no_match' }
 //                     phone -> PC, the offending PAIR_REQUEST is discarded.
 //                     'locked' means the attempt tracker is rate-limited; the

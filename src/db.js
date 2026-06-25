@@ -6,7 +6,18 @@ const DB_PATH = path.join(__dirname, '..', 'data', 'passwords.db');
 // Bump whenever a new table or column is added below. Each version block uses
 // CREATE TABLE IF NOT EXISTS / ALTER TABLE ADD COLUMN guarded by a pragma read
 // so existing v0.1/v0.2 databases upgrade in place. See docs/wifi-hotspot-design.md §8.
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
+
+// Add `column` (with `decl`, e.g. "BLOB" / "INTEGER") to `table` only if it is
+// not already present. better-sqlite3 has no "ADD COLUMN IF NOT EXISTS", so we
+// read PRAGMA table_info and skip the ALTER when the column exists. This keeps
+// initDatabase() idempotent across restarts and lets a v3 db upgrade in place.
+function addColumnIfMissing(db, table, column, decl) {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all();
+  if (!cols.some((c) => c.name === column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${decl}`);
+  }
+}
 
 function initDatabase() {
   const fs = require('fs');
@@ -63,6 +74,18 @@ function initDatabase() {
     );
   `);
 
+  // v4 — M3'-B biometric CHALLENGE/RESPONSE. Each paired phone gets a
+  // persistent HMAC key (the phone is the TEE owner and generates it; we
+  // receive it once inside the encrypted PAIR_OK frame). The two timestamps
+  // are bookkeeping for the challenge UI / fallback lockout.
+  //   device_hmac_key   — 32B raw, NULL for v3 rows until they re-ENROLL (§9)
+  //   last_challenge_at  — unix ms of the most recent successful CHALLENGE
+  //   last_fallback_at   — unix ms of the most recent 4-digit-PIN fallback
+  // See docs/m3b-biometric-challenge-design.md §8.
+  addColumnIfMissing(db, 'paired_devices', 'device_hmac_key', 'BLOB');
+  addColumnIfMissing(db, 'paired_devices', 'last_challenge_at', 'INTEGER');
+  addColumnIfMissing(db, 'paired_devices', 'last_fallback_at', 'INTEGER');
+
   // Stamp version so downgrades can refuse early instead of mis-reading rows.
   const stamp = db.prepare(`INSERT OR REPLACE INTO schema_meta (key, value) VALUES (?, ?)`);
   stamp.run('schema_version', String(SCHEMA_VERSION));
@@ -70,4 +93,4 @@ function initDatabase() {
   return db;
 }
 
-module.exports = { initDatabase, DB_PATH, SCHEMA_VERSION };
+module.exports = { initDatabase, DB_PATH, SCHEMA_VERSION, addColumnIfMissing };

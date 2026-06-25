@@ -1,11 +1,17 @@
 package com.passman.pair
 
+import android.os.Build
+import android.security.keystore.KeyProperties
+import android.security.keystore.KeyProtection
 import com.google.crypto.tink.subtle.Hkdf
 import com.google.crypto.tink.subtle.X25519
 import java.nio.ByteBuffer
+import java.security.KeyStore
 import java.security.SecureRandom
 import java.util.Arrays
 import javax.crypto.Cipher
+import javax.crypto.Mac
+import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
@@ -325,5 +331,136 @@ object Crypto {
         var diff = 0
         for (i in a.indices) diff = diff or (a[i].code xor b[i].code)
         return diff == 0
+    }
+
+    // ---------- M3'-B: biometric CHALLENGE / RESPONSE ----------
+    //
+    // The PC sends a CHALLENGE; the phone proves a live fingerprint by computing
+    // HMAC-SHA256(device_hmac_key, AAD) with a Keystore key that is unlocked only
+    // by a successful BiometricPrompt (timeout=0 → every use needs a fresh touch).
+    // See docs/m3b-biometric-challenge-design.md §4–§6.
+    //
+    // device_hmac_key provenance (deviation from design §5, decided 2026-06-25):
+    // §5 literally shows KeyGenerator.generateKey(), but a Keystore-*generated*
+    // key cannot be exported, so the PC could never hold the same key — yet §6
+    // requires a SYMMETRIC HMAC the PC can verify. We therefore IMPORT a 32B
+    // SecureRandom key (minted phone-side, also sent to the PC inside the
+    // encrypted PAIR_OK) via KeyStore.setEntry + KeyProtection. The bytes are
+    // identical on both ends; the Keystore copy adds the bio gate, nothing more.
+
+    private const val ANDROID_KEYSTORE = "AndroidKeyStore"
+    private const val HMAC_ALGO = "HmacSHA256"
+    private const val CHAL_AAD_PREFIX = "PassMan-CHAL-v1"   // 15 bytes (design comment "14B" is off-by-one)
+    const val CHAL_NONCE_SIZE = 32
+    const val CHAL_ID_HEX_LEN = 16                          // 16 ascii hex chars → 16 bytes
+    const val CHAL_FINGERPRINT_RAW_SIZE = 32                // SHA-256(pubkey) raw digest
+
+    /** Keystore alias for a phone's device HMAC key. One per phone identity. */
+    fun deviceHmacAlias(fpHex: String): String = "passman.device_hmac.$fpHex"
+
+    /** Map a challenge purpose string to its 1-byte AAD code (design §4). */
+    fun challengePurposeByte(purpose: String): Byte = when (purpose) {
+        "unlock"            -> 0x01
+        "sync_destructive"  -> 0x02
+        "export_plaintext"  -> 0x03
+        else -> throw IllegalArgumentException("unknown challenge purpose: $purpose")
+    }
+
+    /**
+     * Byte-exact AAD for the challenge HMAC (design §4). Mirror of
+     * buildChallengeAad in scripts/gen-m3b-challenge-vectors.js.
+     *
+     *   prefix(15) || id_utf8(16) || nonce(32) || purpose(1) || ts_be(8) || fp_raw(32) = 104B
+     *
+     * `fingerprintRaw` is the raw 32B SHA-256(pubkey) digest — i.e. hex-decode of
+     * the paired_devices fingerprint, NOT the 64-char hex string itself.
+     */
+    fun buildChallengeAad(
+        id: String,
+        nonce: ByteArray,
+        purpose: String,
+        tsMs: Long,
+        fingerprintRaw: ByteArray,
+    ): ByteArray {
+        val idBytes = id.toByteArray(Charsets.UTF_8)
+        require(idBytes.size == CHAL_ID_HEX_LEN) { "id must be $CHAL_ID_HEX_LEN ascii chars, got ${idBytes.size}" }
+        require(nonce.size == CHAL_NONCE_SIZE) { "nonce must be $CHAL_NONCE_SIZE bytes" }
+        require(fingerprintRaw.size == CHAL_FINGERPRINT_RAW_SIZE) { "fingerprint must be $CHAL_FINGERPRINT_RAW_SIZE raw bytes" }
+        val prefix = CHAL_AAD_PREFIX.toByteArray(Charsets.UTF_8)
+        val ts = ByteBuffer.allocate(8).putLong(tsMs).array()
+        val out = ByteArray(prefix.size + idBytes.size + nonce.size + 1 + ts.size + fingerprintRaw.size)
+        var p = 0
+        fun put(src: ByteArray) { System.arraycopy(src, 0, out, p, src.size); p += src.size }
+        put(prefix); put(idBytes); put(nonce)
+        out[p++] = challengePurposeByte(purpose)
+        put(ts); put(fingerprintRaw)
+        return out
+    }
+
+    /**
+     * Import a 32B raw HMAC key into the AndroidKeyStore under a bio-gated
+     * protection policy (design §5). Best-effort StrongBox: if the device has no
+     * StrongBox the entry is re-imported TEE-backed (risk B3). An existing entry
+     * for the same alias is overwritten so the Keystore copy always matches the
+     * key just handed to the PC.
+     *
+     * Throws only if even the TEE-backed import fails (e.g. no secure lock screen
+     * / no biometrics) — the caller treats that as "this phone can't do the main
+     * biometric path" and relies on the fallback PIN route (B-5).
+     */
+    fun enrollDeviceHmacKey(raw: ByteArray, fpHex: String, allowStrongBox: Boolean = true) {
+        require(raw.size == KEY_SIZE) { "device hmac key must be $KEY_SIZE bytes" }
+        val ks = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
+        val alias = deviceHmacAlias(fpHex)
+        val secret: SecretKey = SecretKeySpec(raw, HMAC_ALGO)
+
+        fun protection(strongBox: Boolean): KeyProtection =
+            KeyProtection.Builder(KeyProperties.PURPOSE_SIGN)
+                .setDigests(KeyProperties.DIGEST_SHA256)
+                .setUserAuthenticationRequired(true)
+                // timeout=0 → every Mac use needs a fresh BIOMETRIC_STRONG touch.
+                .setUserAuthenticationParameters(0, KeyProperties.AUTH_BIOMETRIC_STRONG)
+                // New/removed fingerprints invalidate the key → forces re-pair (§5/§9).
+                .setInvalidatedByBiometricEnrollment(true)
+                .apply {
+                    if (strongBox && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                        setIsStrongBoxBacked(true)
+                    }
+                }
+                .build()
+
+        try {
+            ks.setEntry(alias, KeyStore.SecretKeyEntry(secret), protection(allowStrongBox))
+        } catch (e: Exception) {
+            // StrongBoxUnavailableException (or vendor variants) — retry TEE-backed.
+            ks.setEntry(alias, KeyStore.SecretKeyEntry(secret), protection(false))
+        }
+    }
+
+    /** True if a device HMAC key has been enrolled for this phone identity. */
+    fun hasDeviceHmacKey(fpHex: String): Boolean {
+        val ks = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
+        return ks.containsAlias(deviceHmacAlias(fpHex))
+    }
+
+    /** Remove the enrolled key (e.g. on un-pair). No-op if absent. */
+    fun deleteDeviceHmacKey(fpHex: String) {
+        val ks = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
+        val alias = deviceHmacAlias(fpHex)
+        if (ks.containsAlias(alias)) ks.deleteEntry(alias)
+    }
+
+    /**
+     * Build a Mac initialised with the bio-gated Keystore key, ready to be wrapped
+     * in a BiometricPrompt.CryptoObject. The actual HMAC (doFinal) only succeeds
+     * after the prompt authenticates — see BiometricChallengeSigner.
+     *
+     * May throw KeyPermanentlyInvalidatedException if the user changed their
+     * enrolled fingerprints (caller maps that to "re-pair required", §9).
+     */
+    fun initChallengeMac(fpHex: String): Mac {
+        val ks = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
+        val key = ks.getKey(deviceHmacAlias(fpHex), null) as SecretKey
+        return Mac.getInstance(HMAC_ALGO).apply { init(key) }
     }
 }

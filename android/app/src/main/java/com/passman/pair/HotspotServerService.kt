@@ -449,6 +449,21 @@ class HotspotServerService : Service() {
         // again. Pairs with the per-socket reset at the top of
         // handleEncryptedSocket() to give one-trust-per-attempt semantics.
         userApprovesNext = false
+        // B-2: mint (B-1) + enroll the key into the bio-gated AndroidKeyStore so
+        // a later CHALLENGE can compute its HMAC only after a live fingerprint.
+        // `fingerprint` is THIS phone's identity → the Keystore alias. Best-effort:
+        // a phone with no secure lock screen / no biometrics can't back the key, so
+        // we log and still hand the PC the key, leaving the fallback PIN path (B-5)
+        // to cover it. Re-enrolling on every PAIR_OK keeps the Keystore copy equal
+        // to whatever key we just sent the PC.
+        val hmacKeyB64 = deviceHmacKeyB64()
+        deviceHmacKey?.let { raw ->
+            try {
+                Crypto.enrollDeviceHmacKey(raw, fingerprint)
+            } catch (t: Throwable) {
+                Log.w(TAG, "enrollDeviceHmacKey failed (fallback PIN path only): ${t.message}")
+            }
+        }
         reply(buildJsonObject {
             put("t", "PAIR_OK")
             put("fingerprint", fingerprint)
@@ -456,7 +471,7 @@ class HotspotServerService : Service() {
             // M3'-B: hand the PC the per-device HMAC key + a snapshot of whether
             // this phone can do strong biometrics, so it knows whether to offer
             // biometric CHALLENGE later (design §8/§9).
-            put("device_hmac_key_b64", deviceHmacKeyB64())
+            put("device_hmac_key_b64", hmacKeyB64)
             put("biometric_capable", biometricCapable())
         })
         Log.i(TAG, "WS /socket: PAIR_OK to PC, fingerprint=${fingerprint.take(16)}…")

@@ -2,4 +2,15 @@
 <resources>
     <!-- AppCompat-based theme so BiometricDemoActivity (AppCompatActivity) can inflate. -->
     <style name="Theme.PassMan" parent="Theme.AppCompat.Light.NoActionBar" />
+
+    <!-- Transparent host for the biometric CHALLENGE prompt (B-3): only the
+         system biometric sheet should be visible, never this Activity's own
+         window. -->
+    <style name="Theme.PassMan.Transparent" parent="Theme.AppCompat.Light.NoActionBar">
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowContentOverlay">@null</item>
+        <item name="android:backgroundDimEnabled">false</item>
+        <item name="android:windowAnimationStyle">@null</item>
+    </style>
 </resources>

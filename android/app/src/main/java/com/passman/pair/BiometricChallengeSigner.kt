@@ -30,8 +30,13 @@ class BiometricChallengeSigner(private val activity: FragmentActivity) {
         data class Success(val hmac: ByteArray) : Result()
         /** Enrolled fingerprints changed → key invalidated, user must re-pair (§9). */
         object KeyInvalidated : Result()
-        /** Terminal biometric error (cancel, lockout, hw unavailable) or HMAC failure. */
-        data class Error(val code: String, val message: String) : Result()
+        /**
+         * Terminal biometric error (cancel, lockout, hw unavailable) or HMAC
+         * failure. `androidCode` is the BiometricPrompt.ERROR_* int when the
+         * failure came from the prompt (null for non-prompt failures like
+         * mac_init), so callers can distinguish "user cancelled" from "lockout".
+         */
+        data class Error(val code: String, val message: String, val androidCode: Int? = null) : Result()
     }
 
     companion object { private const val TAG = "PassManChallenge" }
@@ -81,7 +86,7 @@ class BiometricChallengeSigner(private val activity: FragmentActivity) {
 
             override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
                 // Terminal: cancel, permanent lockout, hw unavailable, etc.
-                onResult(Result.Error("bio_error_$errorCode", errString.toString()))
+                onResult(Result.Error("bio_error_$errorCode", errString.toString(), androidCode = errorCode))
             }
 
             // onAuthenticationFailed is non-terminal (a single non-matching

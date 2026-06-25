@@ -14,6 +14,7 @@ import android.os.PowerManager
 import android.util.Base64
 import android.util.Log
 import androidx.biometric.BiometricManager
+import androidx.biometric.BiometricPrompt
 import io.ktor.serialization.kotlinx.json.json
 import io.ktor.server.application.call
 import io.ktor.server.application.install
@@ -39,6 +40,8 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.long
 import kotlinx.serialization.json.put
+import kotlinx.coroutines.withTimeoutOrNull
+import java.security.MessageDigest
 import java.security.SecureRandom
 
 /**
@@ -366,6 +369,14 @@ class HotspotServerService : Service() {
                                     reply = ::replyEncrypted,
                                 )
                             }
+                            "CHALLENGE" -> {
+                                handleChallenge(
+                                    req = req,
+                                    fingerprintHex = fingerprint,
+                                    myPubkey = kp.publicKey,
+                                    reply = ::replyEncrypted,
+                                )
+                            }
                             else -> {
                                 // Unknown but well-formed & authenticated: log and drop.
                                 Log.w(TAG, "unknown msg type, dropping: ${req["t"]}")
@@ -475,6 +486,122 @@ class HotspotServerService : Service() {
             put("biometric_capable", biometricCapable())
         })
         Log.i(TAG, "WS /socket: PAIR_OK to PC, fingerprint=${fingerprint.take(16)}…")
+    }
+
+    /**
+     * M3'-B B-3 CHALLENGE dispatcher (design §3/§6/§10). Validates the request,
+     * builds the §4 AAD, drives a BiometricPrompt via ChallengePromptActivity,
+     * and replies RESPONSE { hmac, ts, biometric_ok } or RESPONSE { error }.
+     *
+     * `fingerprintHex` / `myPubkey` are THIS connection's identity — the Keystore
+     * alias and the AAD fingerprint, respectively. Because M3'-A still mints an
+     * ephemeral keypair per connection (persistent identity is M4'), the bio key
+     * is only findable on the same connection that paired (and enrolled) it; a
+     * reconnect changes the fingerprint and yields error=unknown_device until M4'.
+     *
+     * When the phone has no usable strong biometrics we emit FALLBACK_REQ so the
+     * PC can start the 4-digit-PIN path; the PIN handling itself lands in B-5.
+     */
+    private suspend fun handleChallenge(
+        req: JsonObject,
+        fingerprintHex: String,
+        myPubkey: ByteArray,
+        reply: suspend (JsonObject) -> Unit,
+    ) {
+        val id = req["id"]?.jsonPrimitive?.content
+        if (id == null || id.length != Crypto.CHAL_ID_HEX_LEN) {
+            // Can't echo a malformed id back meaningfully — drop and let the PC
+            // time out rather than answer an unparseable challenge.
+            Log.w(TAG, "CHALLENGE with bad id, dropping")
+            return
+        }
+
+        fun respondError(error: String) = buildJsonObject {
+            put("t", "RESPONSE"); put("id", id); put("error", error)
+        }
+
+        val purpose = req["purpose"]?.jsonPrimitive?.content
+        if (purpose == null || runCatching { Crypto.challengePurposeByte(purpose) }.isFailure) {
+            reply(respondError("unknown_purpose")); return
+        }
+        val nonce = req["nonce_b64"]?.jsonPrimitive?.content?.let {
+            try { Crypto.b64decode(it) } catch (e: Exception) { null }
+        }
+        if (nonce == null || nonce.size != Crypto.CHAL_NONCE_SIZE) {
+            reply(respondError("bad_nonce")); return
+        }
+
+        // No usable strong biometrics → ask the PC to begin the fallback PIN path.
+        if (!biometricCapable()) {
+            reply(buildJsonObject {
+                put("t", "FALLBACK_REQ"); put("id", id); put("reason", "bio_unavailable")
+            })
+            return
+        }
+        // Key not enrolled for this identity (e.g. challenged on a different
+        // connection than the one that paired — see the ephemeral-keypair note).
+        if (!Crypto.hasDeviceHmacKey(fingerprintHex)) {
+            reply(respondError("unknown_device")); return
+        }
+
+        // Phone picks ts; the AAD binds it, and the PC checks |ts - now| < 30s.
+        val ts = System.currentTimeMillis()
+        val fingerprintRaw = MessageDigest.getInstance("SHA-256").digest(myPubkey)
+        val aad = try {
+            Crypto.buildChallengeAad(id, nonce, purpose, ts, fingerprintRaw)
+        } catch (e: Exception) {
+            Log.w(TAG, "buildChallengeAad failed: ${e.message}")
+            reply(respondError("bad_nonce")); return
+        }
+
+        // Hand off to the prompt Activity and await the signed HMAC.
+        // TODO(hardening): launching an Activity from a Service is restricted on
+        // Android 12+ background. Pairing is interactive so the foreground-app
+        // exemption applies; the truly-backgrounded case needs a
+        // full-screen-intent notification.
+        val deferred = ChallengeBridge.enqueue(ChallengeBridge.Request(id, fingerprintHex, aad))
+        try {
+            startActivity(Intent(this, ChallengePromptActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                putExtra(ChallengePromptActivity.EXTRA_CHALLENGE_ID, id)
+            })
+        } catch (t: Throwable) {
+            Log.w(TAG, "could not launch ChallengePromptActivity: ${t.message}")
+            ChallengeBridge.cancel(id)
+            reply(respondError("bio_unavailable")); return
+        }
+
+        // §10: 30s challenge window. Give the prompt headroom; the PC enforces
+        // the real freshness bound on ts anyway.
+        val result = withTimeoutOrNull(60_000L) { deferred.await() }
+        if (result == null) {
+            ChallengeBridge.cancel(id)
+            reply(respondError("user_cancelled")); return
+        }
+
+        when (result) {
+            is BiometricChallengeSigner.Result.Success -> reply(buildJsonObject {
+                put("t", "RESPONSE")
+                put("id", id)
+                put("hmac_b64", Crypto.b64encode(result.hmac))
+                put("ts", ts)
+                put("biometric_ok", true)
+            })
+            is BiometricChallengeSigner.Result.KeyInvalidated ->
+                // Fingerprints changed since pairing → PC must prompt a re-pair (§9).
+                reply(respondError("key_invalidated"))
+            is BiometricChallengeSigner.Result.Error ->
+                reply(respondError(mapBiometricError(result)))
+        }
+    }
+
+    /** Map a signer Error to one of the §3 RESPONSE error codes. */
+    private fun mapBiometricError(err: BiometricChallengeSigner.Result.Error): String = when (err.androidCode) {
+        BiometricPrompt.ERROR_USER_CANCELED,
+        BiometricPrompt.ERROR_NEGATIVE_BUTTON,
+        BiometricPrompt.ERROR_CANCELED -> "user_cancelled"
+        // TODO(B-5): ERROR_LOCKOUT_PERMANENT should switch to the fallback PIN path.
+        else -> "bio_failed"
     }
 
     private fun shutdownServer() {

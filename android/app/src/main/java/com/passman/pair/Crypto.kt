@@ -3,6 +3,7 @@ package com.passman.pair
 import android.os.Build
 import android.security.keystore.KeyProperties
 import android.security.keystore.KeyProtection
+import android.security.keystore.StrongBoxUnavailableException
 import com.google.crypto.tink.subtle.Hkdf
 import com.google.crypto.tink.subtle.X25519
 import java.nio.ByteBuffer
@@ -431,8 +432,8 @@ object Crypto {
 
         try {
             ks.setEntry(alias, KeyStore.SecretKeyEntry(secret), protection(allowStrongBox))
-        } catch (e: Exception) {
-            // StrongBoxUnavailableException (or vendor variants) — retry TEE-backed.
+        } catch (e: StrongBoxUnavailableException) {
+            // No StrongBox on this device — retry TEE-backed (risk B3).
             ks.setEntry(alias, KeyStore.SecretKeyEntry(secret), protection(false))
         }
     }

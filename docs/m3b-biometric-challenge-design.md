@@ -63,7 +63,7 @@ phone -> PC     RESPONSE      ... biometric_ok:false（同上结构）
 ## 4. HMAC 输入定义
 
 ```
-AAD = "PassMan-CHAL-v1"               // 14B 协议域分隔，防与其它 HMAC 用途串
+AAD = "PassMan-CHAL-v1"               // 15B 协议域分隔，防与其它 HMAC 用途串
     || id           (16B utf8 hex)
     || nonce        (32B raw)
     || purpose_byte (1B: 0x01 unlock / 0x02 sync_destructive / 0x03 export_plaintext)
@@ -98,6 +98,10 @@ val spec = KeyGenParameterSpec.Builder(
 KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_HMAC_SHA256, "AndroidKeyStore")
     .apply { init(spec) }
     .generateKey()
+// ⚠️ 实现偏离：实际未用 generateKey()。Keystore 内生成的 key 不可导出，PC 拿不到
+//    对称 HMAC 副本（违反 §6）。改为 SecureRandom 生成 32B raw → KeyStore.setEntry
+//    带 bio-gate 的 KeyProtection 导入，同一 raw 也发 PC。详见决策记录 2026-06-25
+//    及 Crypto.enrollDeviceHmacKey 注释。上方 spec 的 bio-gate 参数等价迁到 KeyProtection。
 ```
 
 要点：

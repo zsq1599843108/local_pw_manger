@@ -125,11 +125,15 @@ class HotspotServerService : Service() {
     // once inside the encrypted PAIR_OK frame (design §8). We mint it lazily and
     // cache it for this service lifetime.
     //
-    // TODO(B-2): replace this in-memory mint with AndroidKeyStore enrollment —
-    // a PURPOSE_SIGN HMAC key with setUserAuthenticationRequired(true) plus a
-    // no-bio-gate EncryptedSharedPreferences mirror for the fallback path. Until
-    // then the key is NOT persisted on the phone, so a service restart forces a
-    // re-ENROLL on the next connection (design §9 handles this gracefully).
+    // B-2 (done): on PAIR_OK the raw key is imported into the bio-gated
+    // AndroidKeyStore (Crypto.enrollDeviceHmacKey) so a later CHALLENGE can only
+    // sign after a live fingerprint.
+    //
+    // TODO(B-5): the key is still only minted in-memory here — there is NO
+    // no-bio-gate EncryptedSharedPreferences mirror yet, so a service restart
+    // mints a fresh key and forces a re-ENROLL on the next connection (design §9
+    // handles this gracefully, but the fallback PIN path needs the persisted
+    // mirror to recompute the same HMAC — see design §8).
     @Volatile private var deviceHmacKey: ByteArray? = null
     private val secureRandom = SecureRandom()
 

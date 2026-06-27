@@ -2,36 +2,40 @@
 
 > Claude 进入项目时**第一个读这个文件**。每次离开前必须更新「上次离开时停在哪」和「下次回来要做的」。
 
-**last update**: 2026-06-27（B-4 已提交并 push；B-5 第一刀完成：PC 端 fallback 流 + 纯 Kotlin FallbackPinTracker/PBKDF2 已测，待 Android ESP/PIN-Activity 接线）
+**last update**: 2026-06-27（B-3 P→S 已修 @2ade2b4（reviewer 看了旧 commit）；JDK 路径移出库 @b66d265；§7 翻案到**方案 C** 并完成 PC 端重写：双 key K_bio/K_pin、verify 按「哪把 key 验过」判定、不信 biometric_ok；schema v5；文档已同步）
 
 ## 🎯 当前阶段
 
 正在做：**v0.3 — Wi-Fi 热点改造**
-- v0.3 整体进度：~80%
+- v0.3 整体进度：~82%
 - M3'-A：**✅ merged main** @ 712bf39（PIN 配对 + paired_devices TOFU）
-- M3'-B 设计：**✅ 设计稿 0f5cba4 已上 main** (`docs/m3b-biometric-challenge-design.md`)
+- M3'-B 设计：**✅ 设计稿已上 main**；§7 已翻案方案 C、§8 argon2id→PBKDF2（本轮同步）
 - M3'-B 实施（分支 `feature/m3b-biometric-challenge`）：
-  - **B-1 ✅** @ 074500a — PAIR_OK 扩展 device_hmac_key + db schema v4
-  - **B-2 ✅** @ 06489e4 — Keystore HMAC 导入 + BiometricChallengeSigner（reviewer ⚠️通过，1 must-fix）
-  - **B-3 ✅** @ 617f754 — CHALLENGE dispatcher + 透明 prompt Activity + ChallengeBridge
-  - **B-4 ✅** (已 push) — PC 端 lan-challenge.js verify + challenge-ui.js（22 单测）
-  - **B-5 🔨 进行中** — 第一刀已完成（见下）；剩 Android 端
+  - **B-1/B-2/B-3 ✅**（B-3 P→S blocker 已修 @2ade2b4）
+  - **B-4 ✅** — PC 端 verify + challenge-ui
+  - **B-5 🔨** — PC 端方案 C 已完成（见下）；Android 第二刀未开
   - B-6/B-7 ⏳ 未开
 - 下个动作：**B-5 第二刀（Android 端，本环境无法编译/单测，交真机+reviewer）**
 
-## 🔨 B-5 拆分（2026-06-27 决策）
+## 🔨 B-5 / 方案 C（2026-06-27）
 
-**已完成（本 commit，可测）：**
-- 设计 §3 vs §7 矛盾已拍板：**PIN 在手机输 + 手机本地比对**；`FALLBACK_PIN` 帧仅作 PC 的「用户已同意，去弹 PIN」信号（无 pin 值）；PIN 首次设定放「首次走 fallback 时手机引导」。
-- PIN 哈希用 **PBKDF2**（JCE 内置，非 argon2 —— 4 位 PIN 真正防线是 3次/24h 锁）。
-- `Crypto.FallbackPinTracker`（3次/24h + snapshot/restore 供下刀 ESP 持久化）+ `hashFallbackPin`/`verifyFallbackPin` → `FallbackPinTest.kt` 9 单测绿。
-- PC 端：`lan-challenge.js` FALLBACK_REQ 不再消费（留 pending 供 PIN 后 RESPONSE）+ `cancel(id)` + pending TTL 清理；`/api/lan/challenge/cancel` 路由；`challenge-ui.js` fallback modal → 发 FALLBACK_PIN → 收最终 RESPONSE。Node 测 31 绿。
+**§7 决策：方案 C（加固）** —— fallback 用独立 `K_pin`（≠ K_bio 副本），PC 同存两把，按「哪把 key 验过 HMAC」判定 bio/fallback；`biometric_ok` 降级纯展示、不参与鉴权。K_bio 永不出 Keystore/ESP，受控手机算不出 → 软门由密码学强制，无法冒充强认证。
 
-**剩余（下一 commit，Android-only，本环境无法编译/单测）：**
+**已完成（PC 端 + 文档，本环境测绿）：**
+- db.js schema v4→**v5** 加 `device_pin_key` 列；paired-devices `trustDevice` 收 K_pin + `enrollPinKey` 回填；lan-device-routes `/trust` 收 `device_pin_key_b64` + GET `has_pin_key`。
+- **lan-challenge.js verify() 重写**：先试 K_bio(全 purpose) 再试 K_pin(仅 unlock)，删掉对 `response.biometric_ok` 的信任；biometricOk 由匹配的 key 推导。
+- lan-pair.js PAIR_OK 摄入 `device_pin_key_b64` → /trust。
+- 测试：m3b-challenge **33 绿**（含「谎报 biometric_ok 无效」「K_pin 不放行 export」关键用例）；m3a-db 27 / m3a-routes 34 / gen-vectors 全绿。
+- 文档：§3/§7/§8/§9/§16 已同步方案 C + PBKDF2。
+- 早先：B-3 P→S @2ade2b4（lint NewApi=0）；JDK 路径移到 ~/.gradle @b66d265。
+- 纯 Kotlin `FallbackPinTracker` + PBKDF2 助手 + FallbackPinTest（9 绿）已在 1090b52。
+
+**剩余（第二刀，Android-only，本环境无法编译/单测，真机验证留 B-6）：**
 - 加依赖 `androidx.security:security-crypto`（ESP，已决策自动加）。
-- `DeviceKeyStore`(EncryptedSharedPreferences)：raw key 无 bio-gate 副本 = PAIR_OK 下发 + fallback HMAC 同一来源（**修 reviewer 待办 #1**）+ PIN hash/salt/lockout failures 持久化。
-- HotspotServerService：收 `FALLBACK_PIN` → 弹 PIN 输入 Activity → 比对 → 用副本算 HMAC → 回 RESPONSE{bio:false}；`ERROR_LOCKOUT_PERMANENT`→FALLBACK_REQ（line 607 TODO）。
-- PIN 输入 Activity（首次设定 + 后续验证）。
+- Crypto：K_pin 的纯 HMAC 计算（SecretKeySpec，不走 Keystore）。
+- HotspotServerService：配对时**独立生成 K_pin** 存 ESP + PAIR_OK 带 `device_pin_key_b64`；收 `FALLBACK_PIN` → PIN Activity → 比对(PBKDF2) → 用 K_pin 算 HMAC → 回 RESPONSE；`ERROR_LOCKOUT_PERMANENT`→FALLBACK_REQ。
+- ESP 持久化（K_pin + PIN hash/salt + tracker failures snapshot/restore）+ PIN 输入 Activity（首次设定 + 验证）。
+- ⚠️ K_bio 仍**只**进 Keystore，绝不写 ESP。
 
 ## 🔴 明天首要：reviewer B-2 反馈（必须先修）
 

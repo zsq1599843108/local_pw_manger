@@ -7,8 +7,11 @@
 //                             handshakes against the stored fingerprint
 //   trusted_at   INTEGER      unix ms when the user first confirmed pairing
 //   last_seen    INTEGER      unix ms of most recent successful handshake
-//   device_hmac_key   BLOB(32)  M3'-B HMAC key for biometric CHALLENGE; NULL
+//   device_hmac_key   BLOB(32)  M3'-B bio-gated CHALLENGE key (K_bio); NULL
 //                               for rows paired before v4 (re-ENROLL fills it)
+//   device_pin_key    BLOB(32)  M3'-B fallback PIN key (K_pin, design §7 方案 C);
+//                               separate key the phone keeps un-gated in ESP, used
+//                               only for the non-biometric path. NULL until enrolled
 //   last_challenge_at INTEGER   unix ms of most recent successful CHALLENGE
 //   last_fallback_at  INTEGER   unix ms of most recent 4-digit-PIN fallback
 //
@@ -37,19 +40,21 @@ function fingerprintHex(pubBytes) {
  * fingerprint already exists — the caller decides whether to update label /
  * last_seen via touchLastSeen() instead.
  *
- * `deviceHmacKey` (32B Buffer) is the M3'-B biometric HMAC key the phone sends
- * inside PAIR_OK. It is optional: a phone that has not yet enrolled (v3-era, or
- * a phone with no biometrics) pairs with NULL and back-fills later via the
- * ENROLL_HMAC path (design §9).
+ * `deviceHmacKey` (32B Buffer) is the M3'-B bio-gated CHALLENGE key (K_bio) the
+ * phone sends inside PAIR_OK. `devicePinKey` (32B Buffer) is the separate
+ * fallback key (K_pin, design §7 方案 C). Both are optional: a phone that has
+ * not yet enrolled (v3-era, or a phone with no biometrics) pairs with NULL and
+ * back-fills later via the ENROLL path (design §9).
  */
-function trustDevice(db, { fingerprint, label, pubkey, deviceHmacKey = null, trustedAt = Date.now() }) {
+function trustDevice(db, { fingerprint, label, pubkey, deviceHmacKey = null, devicePinKey = null, trustedAt = Date.now() }) {
   const stmt = db.prepare(`
-    INSERT INTO paired_devices (fingerprint, label, pubkey, trusted_at, last_seen, device_hmac_key)
-    VALUES (?, ?, ?, ?, ?, ?)
+    INSERT INTO paired_devices (fingerprint, label, pubkey, trusted_at, last_seen, device_hmac_key, device_pin_key)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
   `);
   stmt.run(
     fingerprint, label, Buffer.from(pubkey), trustedAt, trustedAt,
     deviceHmacKey ? Buffer.from(deviceHmacKey) : null,
+    devicePinKey ? Buffer.from(devicePinKey) : null,
   );
 }
 
@@ -96,6 +101,20 @@ function enrollHmacKey(db, fingerprint, deviceHmacKey) {
   return true;
 }
 
+/**
+ * Back-fill the fallback PIN key (K_pin, design §7 方案 C). Same swap-protection
+ * as enrollHmacKey: only writes when the column is NULL, so a re-pair can't
+ * silently replace an existing K_pin (treated as an attack, §9).
+ */
+function enrollPinKey(db, fingerprint, devicePinKey) {
+  const row = db.prepare(`SELECT device_pin_key FROM paired_devices WHERE fingerprint = ?`)
+    .get(fingerprint);
+  if (!row || row.device_pin_key != null) return false;
+  db.prepare(`UPDATE paired_devices SET device_pin_key = ? WHERE fingerprint = ?`)
+    .run(Buffer.from(devicePinKey), fingerprint);
+  return true;
+}
+
 /** Untrust (user-revoke). Returns number of rows removed (0 or 1). */
 function revoke(db, fingerprint) {
   return db.prepare(`DELETE FROM paired_devices WHERE fingerprint = ?`)
@@ -111,5 +130,6 @@ module.exports = {
   touchChallengeAt,
   touchFallbackAt,
   enrollHmacKey,
+  enrollPinKey,
   revoke,
 };

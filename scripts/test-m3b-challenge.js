@@ -32,6 +32,7 @@ function freshDb() {
       trusted_at  INTEGER NOT NULL,
       last_seen   INTEGER NOT NULL,
       device_hmac_key   BLOB,
+      device_pin_key    BLOB,
       last_challenge_at INTEGER,
       last_fallback_at  INTEGER
     );
@@ -45,18 +46,23 @@ function ok(name, cond) {
   else      { fail++; console.log('  ✗ ' + name); }
 }
 
-// Insert a paired device with a known HMAC key; return its descriptor.
-function seedDevice(db, { seed = 1, withKey = true } = {}) {
+// Insert a paired device with known K_bio + K_pin; return its descriptor.
+// `dev.key` aliases the bio key so older single-key tests read naturally.
+function seedDevice(db, { seed = 1, withKey = true, withPinKey = true } = {}) {
   const pubkey = Buffer.from(Array.from({ length: 32 }, (_, i) => (seed + i) & 0xff));
   const fingerprint = pairedDevices.fingerprintHex(pubkey);
-  const key = withKey ? Buffer.from(Array.from({ length: 32 }, (_, i) => (seed * 3 + i) & 0xff)) : null;
+  const bioKey = withKey ? Buffer.from(Array.from({ length: 32 }, (_, i) => (seed * 3 + i) & 0xff)) : null;
+  const pinKey = withPinKey ? Buffer.from(Array.from({ length: 32 }, (_, i) => (seed * 7 + 0x40 + i) & 0xff)) : null;
   pairedDevices.trustDevice(db, {
-    fingerprint, label: 'Test phone', pubkey, deviceHmacKey: key, trustedAt: 1_000_000,
+    fingerprint, label: 'Test phone', pubkey, deviceHmacKey: bioKey, devicePinKey: pinKey, trustedAt: 1_000_000,
   });
-  return { pubkey, fingerprint, key };
+  return { pubkey, fingerprint, bioKey, pinKey, key: bioKey };
 }
 
 // Simulate the phone signing a registered challenge → a RESPONSE envelope.
+// `key` is the raw key the phone signs with (K_bio or K_pin); `biometricOk` is
+// the (now display-only, PC-ignored) flag, exposed so tests can prove the PC
+// derives the truth from which key verified rather than from this field.
 function phoneSign({ id, nonce, purpose, key, fingerprint, ts, biometricOk = true }) {
   const aad = buildChallengeAad({
     id, nonce, purpose, tsMs: ts, fingerprintRaw: Buffer.from(fingerprint, 'hex'),
@@ -131,24 +137,38 @@ function unitTests() {
     const clock = 1_700_000_000_000;
     const v = new ChallengeVerifier({ db, now: () => clock });
 
-    // unlock under fallback → allowed
+    // unlock signed with K_pin (fallback) → allowed, biometricOk derived false
     const chU = createChallenge({ purpose: 'unlock', now: () => clock });
     v.register({ id: chU.id, fingerprint: dev.fingerprint, nonce: chU.nonce, purpose: 'unlock', createdAt: clock });
-    const rU = v.verify(phoneSign({ id: chU.id, nonce: chU.nonce, purpose: 'unlock', key: dev.key, fingerprint: dev.fingerprint, ts: clock, biometricOk: false }));
-    ok('fallback unlock allowed', rU.ok && rU.biometricOk === false);
+    const rU = v.verify(phoneSign({ id: chU.id, nonce: chU.nonce, purpose: 'unlock', key: dev.pinKey, fingerprint: dev.fingerprint, ts: clock }));
+    ok('K_pin unlock allowed (fallback)', rU.ok && rU.biometricOk === false);
     ok('fallback stamps last_fallback_at', pairedDevices.findByFingerprint(db, dev.fingerprint).last_fallback_at === clock);
 
-    // export_plaintext under fallback → denied
+    // 方案 C core: a phone lying biometric_ok:true while signing with K_pin is
+    // STILL fallback — the PC trusts which key verified, not the flag.
+    const chL = createChallenge({ purpose: 'unlock', now: () => clock });
+    v.register({ id: chL.id, fingerprint: dev.fingerprint, nonce: chL.nonce, purpose: 'unlock', createdAt: clock });
+    const rL = v.verify(phoneSign({ id: chL.id, nonce: chL.nonce, purpose: 'unlock', key: dev.pinKey, fingerprint: dev.fingerprint, ts: clock, biometricOk: true }));
+    ok('lying biometric_ok:true with K_pin still fallback', rL.ok && rL.biometricOk === false);
+
+    // Converse: K_bio signature with biometric_ok:false is still biometric.
+    const chC = createChallenge({ purpose: 'unlock', now: () => clock });
+    v.register({ id: chC.id, fingerprint: dev.fingerprint, nonce: chC.nonce, purpose: 'unlock', createdAt: clock });
+    const rC = v.verify(phoneSign({ id: chC.id, nonce: chC.nonce, purpose: 'unlock', key: dev.bioKey, fingerprint: dev.fingerprint, ts: clock, biometricOk: false }));
+    ok('K_bio with biometric_ok:false still biometric', rC.ok && rC.biometricOk === true);
+
+    // export_plaintext signed with K_pin → rejected: the PC never tries K_pin
+    // for non-unlock purposes, so K_bio is the only door (hmac_mismatch).
     const chE = createChallenge({ purpose: 'export_plaintext', now: () => clock });
     v.register({ id: chE.id, fingerprint: dev.fingerprint, nonce: chE.nonce, purpose: 'export_plaintext', createdAt: clock });
-    const rE = v.verify(phoneSign({ id: chE.id, nonce: chE.nonce, purpose: 'export_plaintext', key: dev.key, fingerprint: dev.fingerprint, ts: clock, biometricOk: false }));
-    ok('fallback export_plaintext denied', !rE.ok && rE.reason === 'fallback_purpose_denied');
+    const rE = v.verify(phoneSign({ id: chE.id, nonce: chE.nonce, purpose: 'export_plaintext', key: dev.pinKey, fingerprint: dev.fingerprint, ts: clock }));
+    ok('K_pin export_plaintext denied (hmac_mismatch)', !rE.ok && rE.reason === 'hmac_mismatch');
 
-    // sync_destructive WITH biometric → allowed (only the fallback path is gated)
+    // sync_destructive WITH biometric (K_bio) → allowed.
     const chS = createChallenge({ purpose: 'sync_destructive', now: () => clock });
     v.register({ id: chS.id, fingerprint: dev.fingerprint, nonce: chS.nonce, purpose: 'sync_destructive', createdAt: clock });
-    const rS = v.verify(phoneSign({ id: chS.id, nonce: chS.nonce, purpose: 'sync_destructive', key: dev.key, fingerprint: dev.fingerprint, ts: clock, biometricOk: true }));
-    ok('biometric sync_destructive allowed', rS.ok);
+    const rS = v.verify(phoneSign({ id: chS.id, nonce: chS.nonce, purpose: 'sync_destructive', key: dev.bioKey, fingerprint: dev.fingerprint, ts: clock }));
+    ok('K_bio sync_destructive allowed', rS.ok && rS.biometricOk === true);
   }
 
   // ---- phone error + FALLBACK_REQ envelopes ----
@@ -168,11 +188,12 @@ function unitTests() {
     const rFb = v.verify({ t: 'FALLBACK_REQ', id: chFb.id, reason: 'bio_unavailable' });
     ok('FALLBACK_REQ surfaces fallback_requested', !rFb.ok && rFb.fallbackRequested === true);
     // FALLBACK_REQ must NOT consume the challenge: the phone sends a RESPONSE
-    // after the user types the fallback PIN, reusing the same id/nonce (§7).
-    const rResume = v.verify(phoneSign({ id: chFb.id, nonce: chFb.nonce, purpose: 'unlock', key: dev.key, fingerprint: dev.fingerprint, ts: clock, biometricOk: false }));
+    // (signed with K_pin) after the user types the fallback PIN, reusing the
+    // same id/nonce (§7).
+    const rResume = v.verify(phoneSign({ id: chFb.id, nonce: chFb.nonce, purpose: 'unlock', key: dev.pinKey, fingerprint: dev.fingerprint, ts: clock }));
     ok('fallback RESPONSE after FALLBACK_REQ verifies', rResume.ok && rResume.biometricOk === false);
     // …and now it IS consumed (replay defence still holds for the resumed path).
-    const rReplay = v.verify(phoneSign({ id: chFb.id, nonce: chFb.nonce, purpose: 'unlock', key: dev.key, fingerprint: dev.fingerprint, ts: clock, biometricOk: false }));
+    const rReplay = v.verify(phoneSign({ id: chFb.id, nonce: chFb.nonce, purpose: 'unlock', key: dev.pinKey, fingerprint: dev.fingerprint, ts: clock }));
     ok('resumed fallback id consumed after RESPONSE', !rReplay.ok && rReplay.reason === 'unknown_challenge');
   }
 
@@ -236,7 +257,7 @@ async function routeTests() {
   console.log('M3\'-B /api/lan/challenge/* route tests:');
   const db = freshDb();
   const dev = seedDevice(db, { seed: 0x80 });
-  const noKeyDev = seedDevice(db, { seed: 0x90, withKey: false });
+  const noKeyDev = seedDevice(db, { seed: 0x90, withKey: false, withPinKey: false });
 
   const app = express();
   app.use(express.json());
@@ -290,7 +311,7 @@ async function routeTests() {
   r = await post('/api/lan/challenge/verify', { response: { t: 'FALLBACK_REQ', id: fbId, reason: 'bio_unavailable' } });
   j = await r.json();
   ok('HTTP FALLBACK_REQ → fallback_requested', j.ok === false && j.fallback_requested === true);
-  const fbResp = phoneSign({ id: fbId, nonce: fbNonce, purpose: 'unlock', key: dev.key, fingerprint: dev.fingerprint, ts: Date.now(), biometricOk: false });
+  const fbResp = phoneSign({ id: fbId, nonce: fbNonce, purpose: 'unlock', key: dev.pinKey, fingerprint: dev.fingerprint, ts: Date.now() });
   r = await post('/api/lan/challenge/verify', { response: fbResp });
   j = await r.json();
   ok('HTTP fallback RESPONSE verifies', j.ok === true && j.biometric_ok === false);

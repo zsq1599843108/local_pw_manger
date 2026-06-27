@@ -45,9 +45,9 @@ function installLanChallengeRoutes(app, db, { verifier } = {}) {
     if (!device) {
       return res.status(404).json({ ok: false, error: 'unknown_device' });
     }
-    if (device.device_hmac_key == null) {
-      // Paired before it had a biometric key (§9) — no challenge possible until
-      // the phone back-fills via ENROLL_HMAC.
+    if (device.device_hmac_key == null && device.device_pin_key == null) {
+      // Paired before it had any biometric/PIN key (§9) — no challenge possible
+      // until the phone back-fills K_bio and/or K_pin via ENROLL.
       return res.status(409).json({ ok: false, error: 'no_hmac_key' });
     }
 

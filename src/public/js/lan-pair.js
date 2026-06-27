@@ -243,17 +243,18 @@
     // same live channel without re-deriving it.
     openEncryptedChannel._lastFingerprint = reply.fingerprint;
 
-    // M3'-B: the phone may carry its biometric HMAC key in PAIR_OK. Validate
-    // it is exactly 32 bytes before forwarding; a malformed value is dropped
-    // (logged) rather than passed on, so the device just pairs without a key
-    // and back-fills later via ENROLL_HMAC (design §9).
+    // M3'-B: the phone may carry two keys in PAIR_OK — K_bio (device_hmac_key,
+    // bio-gated CHALLENGE) and K_pin (device_pin_key, the §7 方案-C fallback
+    // key). Validate each is exactly 32 bytes before forwarding; a malformed
+    // value is dropped (logged) so the device just pairs without it and
+    // back-fills later via ENROLL (design §9).
+    const valid32B64 = (s) => {
+      if (typeof s !== 'string') return false;
+      try { return atob(s).length === 32; } catch (_) { return false; }
+    };
     let hmacKeyB64;
     if (typeof reply.device_hmac_key_b64 === 'string') {
-      const ok32 = (() => {
-        try { return atob(reply.device_hmac_key_b64).length === 32; }
-        catch (_) { return false; }
-      })();
-      if (ok32) {
+      if (valid32B64(reply.device_hmac_key_b64)) {
         hmacKeyB64 = reply.device_hmac_key_b64;
         append(`🔑 device HMAC key received (biometric_capable=${reply.biometric_capable === true})`);
       } else {
@@ -261,6 +262,15 @@
       }
     } else {
       append('ℹ️ phone sent no HMAC key — biometric challenge unavailable until ENROLL');
+    }
+    let pinKeyB64;
+    if (typeof reply.device_pin_key_b64 === 'string') {
+      if (valid32B64(reply.device_pin_key_b64)) {
+        pinKeyB64 = reply.device_pin_key_b64;
+        append('🔑 device PIN-fallback key received');
+      } else {
+        append('⚠️ PAIR_OK device_pin_key_b64 malformed — pairing without fallback');
+      }
     }
 
     // Sanity check: the fingerprint the phone signed had better match what we
@@ -282,6 +292,7 @@
           pubkey_b64: btoa(String.fromCharCode(...peerPub)),
           label: reply.label,
           ...(hmacKeyB64 ? { device_hmac_key_b64: hmacKeyB64 } : {}),
+          ...(pinKeyB64 ? { device_pin_key_b64: pinKeyB64 } : {}),
         }),
       });
       const j = await resp.json();

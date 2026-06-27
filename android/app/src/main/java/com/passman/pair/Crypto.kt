@@ -426,7 +426,7 @@ object Crypto {
                 // New/removed fingerprints invalidate the key → forces re-pair (§5/§9).
                 .setInvalidatedByBiometricEnrollment(true)
                 .apply {
-                    if (strongBox && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    if (strongBox && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                         setIsStrongBoxBacked(true)
                     }
                 }

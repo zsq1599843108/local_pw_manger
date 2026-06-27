@@ -154,6 +154,17 @@
             } else {
               append(`(unexpected ${msg.t} with no awaiter — dropping)`);
             }
+          } else if (msg.t === 'RESPONSE' || msg.t === 'FALLBACK_REQ') {
+            // M3'-B: biometric CHALLENGE replies arrive on the same channel.
+            // challenge-ui.js installs a one-shot resolver before sending the
+            // CHALLENGE frame; route the reply there.
+            const cResolver = openEncryptedChannel._challengeReplyResolver;
+            if (cResolver) {
+              openEncryptedChannel._challengeReplyResolver = null;
+              cResolver(msg);
+            } else {
+              append(`(unexpected ${msg.t} with no awaiter — dropping)`);
+            }
           } else {
             append(`(ignoring unexpected msg ${msg.t})`);
           }
@@ -228,6 +239,9 @@
       return;
     }
     append(`✓ PAIR_OK from phone — fingerprint=${reply.fingerprint?.slice(0, 16)}…, label="${reply.label}"`);
+    // Stash the fingerprint so challenge-ui.js can target this device on the
+    // same live channel without re-deriving it.
+    openEncryptedChannel._lastFingerprint = reply.fingerprint;
 
     // M3'-B: the phone may carry its biometric HMAC key in PAIR_OK. Validate
     // it is exactly 32 bytes before forwarding; a malformed value is dropped
@@ -279,4 +293,17 @@
   }
 
   window.startLanProbe = startLanProbe;
+
+  // M3'-B: expose the live channel stash so challenge-ui.js can run a CHALLENGE
+  // on the same connection that paired the device, and install its one-shot
+  // resolver onto the openEncryptedChannel function the onmessage handler reads.
+  window.PassManChannelStash = () => ({
+    channel:     openEncryptedChannel._lastChannel || null,
+    ws:          openEncryptedChannel._lastWs || null,
+    peerPub:     openEncryptedChannel._lastPeerPub || null,
+    fingerprint: openEncryptedChannel._lastFingerprint || null,
+  });
+  window.openEncryptedChannelStashSetChallengeResolver = (fn) => {
+    openEncryptedChannel._challengeReplyResolver = fn;
+  };
 })();

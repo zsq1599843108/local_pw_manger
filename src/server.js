@@ -8,6 +8,7 @@ const { handshakeHandler: aoapHandshake } = require('./aoap-server');
 const { probeHandler: lanProbe } = require('./lan-server');
 const { openBridge } = require('./lan-ws-client');
 const { installLanDeviceRoutes } = require('./lan-device-routes');
+const { installLanChallengeRoutes } = require('./lan-challenge-routes');
 
 const app = express();
 const server = http.createServer(app);
@@ -109,6 +110,12 @@ async function handleLanSocket(browserWs, params) {
 // server stamps it into paired_devices. Implementation lives in
 // lan-device-routes.js so tests can mount it onto an in-memory sqlite.
 installLanDeviceRoutes(app, db);
+
+// ---- M3'-B biometric CHALLENGE/RESPONSE. The browser mints a challenge here,
+// forwards the opaque frame to the phone over the live SecureChannel, then
+// posts the phone's RESPONSE back for HMAC/freshness/replay verification. The
+// device_hmac_key stays server-side — see lan-challenge.js.
+installLanChallengeRoutes(app, db);
 
 
 app.post('/api/auth/setup', (req, res) => {

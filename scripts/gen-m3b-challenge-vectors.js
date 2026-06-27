@@ -1,9 +1,12 @@
-// gen-m3b-challenge-vectors.js — authoritative Node implementation of the
-// M3'-B challenge AAD + HMAC (design §4), plus deterministic cross-language
-// test vectors for the JVM CryptoChallengeTest (added in B-6).
+// gen-m3b-challenge-vectors.js — deterministic cross-language test vectors for
+// the M3'-B challenge AAD + HMAC (design §4), consumed by the JVM
+// CryptoChallengeTest (added in B-6).
 //
-// This file is the byte-level SPEC: Crypto.kt#buildChallengeAad and the PC-side
-// verifier (B-4, src/lan-challenge.js) must reproduce these bytes exactly.
+// The byte-level SPEC now lives in src/lan-challenge.js (the production PC-side
+// verifier). This script IMPORTS buildChallengeAad/computeChallengeHmac from
+// there, so its self-checks validate the production code against the same
+// vectors the JVM reproduces — a single source of truth across all three sides
+// (Kotlin / Node verifier / vectors).
 //
 // Usage:
 //   node scripts/gen-m3b-challenge-vectors.js            # self-check + print JSON to stdout
@@ -15,46 +18,12 @@
 'use strict';
 
 const crypto = require('crypto');
-
-// ---- canonical spec (mirror of Crypto.kt M3'-B section) ----
-
-const CHAL_AAD_PREFIX = 'PassMan-CHAL-v1';   // 15 bytes
-const PURPOSE_BYTE = Object.freeze({
-  unlock: 0x01,
-  sync_destructive: 0x02,
-  export_plaintext: 0x03,
-});
-
-/**
- * AAD = prefix(15) || id_utf8(16) || nonce(32) || purpose(1) || ts_be(8) || fp_raw(32) = 104B
- * `fingerprintRaw` is the raw 32B SHA-256(pubkey) digest (hex-decode of the
- * paired_devices fingerprint), NOT the 64-char hex string.
- */
-function buildChallengeAad({ id, nonce, purpose, tsMs, fingerprintRaw }) {
-  const idBytes = Buffer.from(id, 'utf8');
-  if (idBytes.length !== 16) throw new Error(`id must be 16 ascii chars, got ${idBytes.length}`);
-  if (nonce.length !== 32) throw new Error('nonce must be 32 bytes');
-  if (fingerprintRaw.length !== 32) throw new Error('fingerprintRaw must be 32 bytes');
-  const purposeByte = PURPOSE_BYTE[purpose];
-  if (purposeByte === undefined) throw new Error(`unknown purpose: ${purpose}`);
-  const ts = Buffer.alloc(8);
-  ts.writeBigInt64BE(BigInt(tsMs));
-  return Buffer.concat([
-    Buffer.from(CHAL_AAD_PREFIX, 'utf8'),
-    idBytes,
-    Buffer.from(nonce),
-    Buffer.from([purposeByte]),
-    ts,
-    Buffer.from(fingerprintRaw),
-  ]);
-}
-
-/** HMAC-SHA256(device_hmac_key, AAD) -> 32B Buffer. */
-function computeChallengeHmac(deviceHmacKey, aad) {
-  return crypto.createHmac('sha256', deviceHmacKey).update(aad).digest();
-}
-
-// ---- deterministic inputs ----
+const {
+  buildChallengeAad,
+  computeChallengeHmac,
+  PURPOSE_BYTE,
+  CHAL_AAD_PREFIX,
+} = require('../src/lan-challenge');
 
 function fill(n, fn) { return Buffer.from(Array.from({ length: n }, (_, i) => fn(i) & 0xff)); }
 const hex = (b) => Buffer.from(b).toString('hex').toUpperCase();
@@ -162,5 +131,3 @@ if (failed) process.exit(1);
 
 // ---- emit JSON to stdout ----
 process.stdout.write(JSON.stringify(vectors, null, 2) + '\n');
-
-module.exports = { buildChallengeAad, computeChallengeHmac, PURPOSE_BYTE, CHAL_AAD_PREFIX };

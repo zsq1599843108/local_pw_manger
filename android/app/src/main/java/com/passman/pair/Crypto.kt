@@ -13,7 +13,9 @@ import java.util.Arrays
 import javax.crypto.Cipher
 import javax.crypto.Mac
 import javax.crypto.SecretKey
+import javax.crypto.SecretKeyFactory
 import javax.crypto.spec.GCMParameterSpec
+import javax.crypto.spec.PBEKeySpec
 import javax.crypto.spec.SecretKeySpec
 
 /**
@@ -463,5 +465,122 @@ object Crypto {
         val ks = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
         val key = ks.getKey(deviceHmacAlias(fpHex), null) as SecretKey
         return Mac.getInstance(HMAC_ALGO).apply { init(key) }
+    }
+
+    // ---------- M3'-B B-5: fallback 4-digit PIN (no-biometric soft door) ----------
+    //
+    // When a phone can't do strong biometrics (NO_HARDWARE / NONE_ENROLLED /
+    // HW_UNAVAILABLE, or a prior ERROR_LOCKOUT_PERMANENT), the user proves
+    // presence with a 4-digit fallback PIN typed ON THE PHONE (decided
+    // 2026-06-27, design §7). The phone compares it against a locally stored
+    // PBKDF2 hash and, on match, computes the challenge HMAC with the
+    // non-bio-gated key copy (EncryptedSharedPreferences — wired in the next
+    // B-5 commit). The PC still refuses high-sensitivity purposes whenever
+    // biometric_ok=false (§7), so this door only ever opens `unlock`.
+    //
+    // This is deliberately the "soft door": 4 digits = 10^4, so the real defence
+    // is the 3-tries / 24h FallbackPinTracker below, NOT the hash cost. PBKDF2
+    // (JCE built-in) is sufficient at this purpose; argon2 would add a dependency
+    // for no meaningful gain when the keyspace is 10^4 and lockout is the wall.
+
+    private const val PIN_PBKDF2_ALGO = "PBKDF2WithHmacSHA256"
+    const val FALLBACK_PIN_ITERATIONS = 120_000
+    const val FALLBACK_PIN_SALT_SIZE = 16
+    private const val FALLBACK_PIN_HASH_BITS = 256   // 32-byte derived hash
+
+    /** Fresh 16B salt for a newly-set fallback PIN (stored alongside the hash). */
+    fun randomFallbackSalt(): ByteArray =
+        ByteArray(FALLBACK_PIN_SALT_SIZE).also { SecureRandom().nextBytes(it) }
+
+    /**
+     * PBKDF2-HMAC-SHA256 of a fallback PIN → 32B hash. The PIN char[] is wiped
+     * after use (PBEKeySpec.clearPassword); the caller persists {salt, hash,
+     * iterations} in EncryptedSharedPreferences (design §8).
+     */
+    fun hashFallbackPin(pin: String, salt: ByteArray, iterations: Int = FALLBACK_PIN_ITERATIONS): ByteArray {
+        val spec = PBEKeySpec(pin.toCharArray(), salt, iterations, FALLBACK_PIN_HASH_BITS)
+        return try {
+            SecretKeyFactory.getInstance(PIN_PBKDF2_ALGO).generateSecret(spec).encoded
+        } finally {
+            spec.clearPassword()
+        }
+    }
+
+    /**
+     * Constant-time check of a submitted PIN against a stored PBKDF2 hash.
+     * Recomputes with the stored salt/iterations and compares in constant time
+     * so a wrong PIN leaks no timing signal beyond the (fixed) PBKDF2 cost.
+     */
+    fun verifyFallbackPin(
+        submittedPin: String,
+        salt: ByteArray,
+        expectedHash: ByteArray,
+        iterations: Int = FALLBACK_PIN_ITERATIONS,
+    ): Boolean = constantTimeEquals(hashFallbackPin(submittedPin, salt, iterations), expectedHash)
+
+    private fun constantTimeEquals(a: ByteArray, b: ByteArray): Boolean {
+        if (a.size != b.size) return false
+        var diff = 0
+        for (i in a.indices) diff = diff or (a[i].toInt() xor b[i].toInt())
+        return diff == 0
+    }
+
+    /**
+     * Lockout tracker for the fallback PIN path: 3 wrong PINs lock the channel
+     * for 24h (design §7). Same sliding-window model as PairAttemptTracker, but
+     * with a long window and a low failure ceiling because 4 digits is a tiny
+     * keyspace.
+     *
+     * snapshot()/restore() round-trip the failure timestamps so the next B-5
+     * commit can persist them in EncryptedSharedPreferences (design §8
+     * `fallback_lockout.failures`) and survive a service restart — otherwise a
+     * restart would reset the lockout and hand an attacker fresh tries.
+     */
+    class FallbackPinTracker(
+        val maxFailures: Int = 3,
+        val windowMs: Long = 24 * 60 * 60 * 1000L,   // 24h
+        private val clock: () -> Long = { System.currentTimeMillis() },
+    ) {
+        private val failures = ArrayList<Long>(4)
+
+        @Synchronized
+        fun isLocked(): Boolean {
+            prune()
+            return failures.size >= maxFailures
+        }
+
+        @Synchronized
+        fun recordFailure() {
+            failures.add(clock())
+            prune()
+        }
+
+        @Synchronized
+        fun reset() { failures.clear() }
+
+        @Synchronized
+        fun unlockInMs(): Long {
+            prune()
+            if (failures.size < maxFailures) return 0L
+            val earliestRelevant = failures[failures.size - maxFailures]
+            return maxOf(0L, earliestRelevant + windowMs - clock())
+        }
+
+        /** Failure timestamps (oldest first), pruned to the window — for ESP persistence. */
+        @Synchronized
+        fun snapshot(): LongArray { prune(); return failures.toLongArray() }
+
+        /** Reload failure timestamps from persisted state (design §8). */
+        @Synchronized
+        fun restore(timestamps: LongArray) {
+            failures.clear()
+            failures.addAll(timestamps.toList())
+            prune()
+        }
+
+        private fun prune() {
+            val cutoff = clock() - windowMs
+            while (failures.isNotEmpty() && failures[0] < cutoff) failures.removeAt(0)
+        }
     }
 }

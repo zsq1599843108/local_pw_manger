@@ -2,7 +2,7 @@
 
 > Claude 进入项目时**第一个读这个文件**。每次离开前必须更新「上次离开时停在哪」和「下次回来要做的」。
 
-**last update**: 2026-06-26（M3'-B B-1/B-2/B-3 已提交；reviewer 审 B-1 中、B-2 ⚠️通过含 1 项 must-fix；明天先修 reviewer 意见）
+**last update**: 2026-06-27（B-4 已提交并 push；B-5 第一刀完成：PC 端 fallback 流 + 纯 Kotlin FallbackPinTracker/PBKDF2 已测，待 Android ESP/PIN-Activity 接线）
 
 ## 🎯 当前阶段
 
@@ -14,10 +14,24 @@
   - **B-1 ✅** @ 074500a — PAIR_OK 扩展 device_hmac_key + db schema v4
   - **B-2 ✅** @ 06489e4 — Keystore HMAC 导入 + BiometricChallengeSigner（reviewer ⚠️通过，1 must-fix）
   - **B-3 ✅** @ 617f754 — CHALLENGE dispatcher + 透明 prompt Activity + ChallengeBridge
-  - B-4 ⏳ 未开（PC 端 verify + challenge-ui）
-  - B-5 ⏳ 未开（fallback PIN，**需先确认 §7 双副本方案**）
+  - **B-4 ✅** (已 push) — PC 端 lan-challenge.js verify + challenge-ui.js（22 单测）
+  - **B-5 🔨 进行中** — 第一刀已完成（见下）；剩 Android 端
   - B-6/B-7 ⏳ 未开
-- 下个动作：**明天先按 reviewer 意见改代码（见下）**，再开 B-4
+- 下个动作：**B-5 第二刀（Android 端，本环境无法编译/单测，交真机+reviewer）**
+
+## 🔨 B-5 拆分（2026-06-27 决策）
+
+**已完成（本 commit，可测）：**
+- 设计 §3 vs §7 矛盾已拍板：**PIN 在手机输 + 手机本地比对**；`FALLBACK_PIN` 帧仅作 PC 的「用户已同意，去弹 PIN」信号（无 pin 值）；PIN 首次设定放「首次走 fallback 时手机引导」。
+- PIN 哈希用 **PBKDF2**（JCE 内置，非 argon2 —— 4 位 PIN 真正防线是 3次/24h 锁）。
+- `Crypto.FallbackPinTracker`（3次/24h + snapshot/restore 供下刀 ESP 持久化）+ `hashFallbackPin`/`verifyFallbackPin` → `FallbackPinTest.kt` 9 单测绿。
+- PC 端：`lan-challenge.js` FALLBACK_REQ 不再消费（留 pending 供 PIN 后 RESPONSE）+ `cancel(id)` + pending TTL 清理；`/api/lan/challenge/cancel` 路由；`challenge-ui.js` fallback modal → 发 FALLBACK_PIN → 收最终 RESPONSE。Node 测 31 绿。
+
+**剩余（下一 commit，Android-only，本环境无法编译/单测）：**
+- 加依赖 `androidx.security:security-crypto`（ESP，已决策自动加）。
+- `DeviceKeyStore`(EncryptedSharedPreferences)：raw key 无 bio-gate 副本 = PAIR_OK 下发 + fallback HMAC 同一来源（**修 reviewer 待办 #1**）+ PIN hash/salt/lockout failures 持久化。
+- HotspotServerService：收 `FALLBACK_PIN` → 弹 PIN 输入 Activity → 比对 → 用副本算 HMAC → 回 RESPONSE{bio:false}；`ERROR_LOCKOUT_PERMANENT`→FALLBACK_REQ（line 607 TODO）。
+- PIN 输入 Activity（首次设定 + 后续验证）。
 
 ## 🔴 明天首要：reviewer B-2 反馈（必须先修）
 
@@ -52,14 +66,16 @@
 
 ## 🚧 阻塞 / 待解决
 
-- [ ] **§7 fallback 双副本（EncryptedSharedPreferences 无 bio-gate 副本）待用户拍板** → 阻塞 B-5
-- [ ] reviewer B-2 must-fix（minSdk 30）未修 → 阻塞 B-3 真机生效
+- [x] **§7 fallback 双副本方案已拍板（2026-06-26）：采用方案 A（EncryptedSharedPreferences 无 bio-gate 副本 + PC 端 purpose 限制）** → 解除 B-5 阻塞
+- [ ] reviewer B-2 must-fix（minSdk 30）→ **✅ 已修 @ ba7d9ee**（待 reviewer 复核）
 - [x] 确定技术栈（Node.js + Express + SQLite）
 - [x] 选定手机配对协议（**AOAP**，2026-06-18）→ ❌ Win 上不可行
 - [x] **新协议选定（Wi-Fi hotspot，2026-06-19）**
 - [ ] 准备 iPhone 测兼容性（v0.4+ 范畴）
 
 ## 📌 决策记录
+
+- 2026-06-26: **§7 fallback 采用方案 A（双副本）** —— 指纹临时不可用时，用 EncryptedSharedPreferences 里的无 bio-gate key 副本算 HMAC；安全靠 PC 端对 `biometric_ok:false` 的 purpose 限制（只放行 unlock，拒 sync_destructive/export_plaintext，标记+24h 锁）。论点：HMAC 对称、PC 已持明文 key，手机多存副本未下放秘密。B-5 据此实现 §8 的 EncryptedSharedPreferences 持久化（同时作 PAIR_OK 下发 + fallback 计算的同一来源，修 reviewer 待办 #1）。
 
 - 2026-06-25: **M3'-B Keystore key 用「导入」而非 §5 字面的 `generateKey()`** —— Keystore 内生成的 key 不可导出，PC 拿不到对称 HMAC 副本（违反 §6）。故 `SecureRandom` 生成 32B → `KeyStore.setEntry` 导入带 bio-gate 保护；同一 raw 也发 PC。已落 Crypto.kt 注释 + B-2 commit。
 - 2026-06-25: **M3'-B B-3 新增 2 个 RESPONSE error code**：`key_invalidated`（指纹库变→重配对）/ `bad_nonce`（nonce 非 32B）。已记 design §3。

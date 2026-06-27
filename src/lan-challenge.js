@@ -46,6 +46,13 @@ const TS_SKEW_MS = 30_000;
 // How many recently-used challenge ids we remember to reject replays (design §6).
 const REPLAY_WINDOW = 1000;
 
+// A pending challenge that never gets a RESPONSE (user walked away, socket died)
+// is dropped after this long so the pending map can't grow unbounded. Must be
+// comfortably longer than the browser's 60s challenge-UI ceiling AND the
+// fallback round-trip (FALLBACK_REQ → user approves → PIN entry → RESPONSE),
+// since that whole exchange reuses one pending entry (design §7).
+const PENDING_TTL_MS = 150_000;
+
 /**
  * AAD = prefix(15) || id_utf8(16) || nonce(32) || purpose(1) || ts_be(8) || fp_raw(32) = 104B
  * `fingerprintRaw` is the raw 32B SHA-256(pubkey) digest (hex-decode of the
@@ -110,11 +117,12 @@ function createChallenge({ purpose, randomBytes = crypto.randomBytes, now = Date
  * captured RESPONSE can't be replayed within the freshness window.
  */
 class ChallengeVerifier {
-  constructor({ db, now = () => Date.now(), tsSkewMs = TS_SKEW_MS, replayWindow = REPLAY_WINDOW } = {}) {
+  constructor({ db, now = () => Date.now(), tsSkewMs = TS_SKEW_MS, replayWindow = REPLAY_WINDOW, pendingTtlMs = PENDING_TTL_MS } = {}) {
     this._db = db;
     this._now = now;
     this._tsSkewMs = tsSkewMs;
     this._replayWindow = replayWindow;
+    this._pendingTtlMs = pendingTtlMs;
     this._pending = new Map();    // id -> { fingerprint, nonce, purpose, createdAt }
     this._usedIds = [];           // recently consumed ids, oldest first
     this._usedSet = new Set();
@@ -122,7 +130,25 @@ class ChallengeVerifier {
 
   /** Remember a freshly-minted challenge so a later RESPONSE can be matched. */
   register({ id, fingerprint, nonce, purpose, createdAt = this._now() }) {
+    this._prunePending();
     this._pending.set(id, { fingerprint, nonce: Buffer.from(nonce), purpose, createdAt });
+  }
+
+  /**
+   * Abandon a pending challenge without verifying it — e.g. the user declined
+   * the fallback-PIN modal, or the browser's challenge timed out. Consumes the
+   * id so a late RESPONSE for it can't sneak through afterwards.
+   */
+  cancel(id) {
+    if (typeof id === 'string' && this._pending.has(id)) this._consume(id);
+  }
+
+  /** Drop pending challenges older than the TTL (bounds memory; design §7 round-trip). */
+  _prunePending() {
+    const cutoff = this._now() - this._pendingTtlMs;
+    for (const [id, p] of this._pending) {
+      if (p.createdAt < cutoff) this._pending.delete(id);
+    }
   }
 
   _consume(id) {
@@ -156,8 +182,13 @@ class ChallengeVerifier {
     // Phone asked to start the PIN fallback — the biometric path isn't available
     // on this phone. The PIN handling itself lands in B-5; here we just surface
     // it so the UI can offer the fallback modal (design §7 step 2).
+    //
+    // We deliberately DO NOT consume the id: the same pending challenge (id /
+    // nonce / purpose) is reused for the RESPONSE the phone sends after the user
+    // types the fallback PIN, so it must stay pending. If the user declines the
+    // modal the browser calls cancel(id) (→ /challenge/cancel); otherwise the
+    // TTL prune reclaims it.
     if (response.t === 'FALLBACK_REQ') {
-      this._consume(id);
       return { ok: false, reason: 'fallback_requested', fallbackRequested: true, purpose: pending.purpose };
     }
 

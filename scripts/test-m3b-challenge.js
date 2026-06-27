@@ -167,6 +167,44 @@ function unitTests() {
     v.register({ id: chFb.id, fingerprint: dev.fingerprint, nonce: chFb.nonce, purpose: 'unlock', createdAt: clock });
     const rFb = v.verify({ t: 'FALLBACK_REQ', id: chFb.id, reason: 'bio_unavailable' });
     ok('FALLBACK_REQ surfaces fallback_requested', !rFb.ok && rFb.fallbackRequested === true);
+    // FALLBACK_REQ must NOT consume the challenge: the phone sends a RESPONSE
+    // after the user types the fallback PIN, reusing the same id/nonce (§7).
+    const rResume = v.verify(phoneSign({ id: chFb.id, nonce: chFb.nonce, purpose: 'unlock', key: dev.key, fingerprint: dev.fingerprint, ts: clock, biometricOk: false }));
+    ok('fallback RESPONSE after FALLBACK_REQ verifies', rResume.ok && rResume.biometricOk === false);
+    // …and now it IS consumed (replay defence still holds for the resumed path).
+    const rReplay = v.verify(phoneSign({ id: chFb.id, nonce: chFb.nonce, purpose: 'unlock', key: dev.key, fingerprint: dev.fingerprint, ts: clock, biometricOk: false }));
+    ok('resumed fallback id consumed after RESPONSE', !rReplay.ok && rReplay.reason === 'unknown_challenge');
+  }
+
+  // ---- cancel(): user declined the fallback modal ----
+  {
+    const db = freshDb();
+    const dev = seedDevice(db, { seed: 0x65 });
+    const clock = 1_700_000_000_000;
+    const v = new ChallengeVerifier({ db, now: () => clock });
+    const ch = createChallenge({ purpose: 'unlock', now: () => clock });
+    v.register({ id: ch.id, fingerprint: dev.fingerprint, nonce: ch.nonce, purpose: 'unlock', createdAt: clock });
+    v.verify({ t: 'FALLBACK_REQ', id: ch.id, reason: 'bio_unavailable' });
+    v.cancel(ch.id);
+    const r = v.verify(phoneSign({ id: ch.id, nonce: ch.nonce, purpose: 'unlock', key: dev.key, fingerprint: dev.fingerprint, ts: clock, biometricOk: false }));
+    ok('cancel() drops pending → RESPONSE rejected', !r.ok && r.reason === 'unknown_challenge');
+    ok('cancel() of unknown id is a no-op', (v.cancel('ffffffffffffffff'), true));
+  }
+
+  // ---- pending TTL prune: a stale challenge is reclaimed ----
+  {
+    const db = freshDb();
+    const dev = seedDevice(db, { seed: 0x68 });
+    let clock = 1_700_000_000_000;
+    const v = new ChallengeVerifier({ db, now: () => clock, pendingTtlMs: 150_000 });
+    const stale = createChallenge({ purpose: 'unlock', now: () => clock });
+    v.register({ id: stale.id, fingerprint: dev.fingerprint, nonce: stale.nonce, purpose: 'unlock', createdAt: clock });
+    // Advance past the TTL, then register a fresh challenge → prune evicts the stale one.
+    clock += 150_001;
+    const fresh = createChallenge({ purpose: 'unlock', now: () => clock });
+    v.register({ id: fresh.id, fingerprint: dev.fingerprint, nonce: fresh.nonce, purpose: 'unlock', createdAt: clock });
+    const r = v.verify(phoneSign({ id: stale.id, nonce: stale.nonce, purpose: 'unlock', key: dev.key, fingerprint: dev.fingerprint, ts: clock, biometricOk: false }));
+    ok('stale pending pruned → unknown_challenge', !r.ok && r.reason === 'unknown_challenge');
   }
 
   // ---- unknown challenge id ----
@@ -242,6 +280,32 @@ async function routeTests() {
   r = await post('/api/lan/challenge/verify', { response: staleResp });
   j = await r.json();
   ok('verify stale → reason stale_ts', j.ok === false && j.reason === 'stale_ts');
+
+  // fallback resume over HTTP: create → FALLBACK_REQ keeps it pending → the
+  // post-PIN RESPONSE (biometric_ok:false) verifies on the same shared verifier.
+  r = await post('/api/lan/challenge/create', { fingerprint: dev.fingerprint, purpose: 'unlock' });
+  j = await r.json();
+  const fbId = j.id;
+  const fbNonce = Buffer.from(j.frame.nonce_b64, 'base64');
+  r = await post('/api/lan/challenge/verify', { response: { t: 'FALLBACK_REQ', id: fbId, reason: 'bio_unavailable' } });
+  j = await r.json();
+  ok('HTTP FALLBACK_REQ → fallback_requested', j.ok === false && j.fallback_requested === true);
+  const fbResp = phoneSign({ id: fbId, nonce: fbNonce, purpose: 'unlock', key: dev.key, fingerprint: dev.fingerprint, ts: Date.now(), biometricOk: false });
+  r = await post('/api/lan/challenge/verify', { response: fbResp });
+  j = await r.json();
+  ok('HTTP fallback RESPONSE verifies', j.ok === true && j.biometric_ok === false);
+
+  // /cancel drops a pending challenge so a later RESPONSE is rejected.
+  r = await post('/api/lan/challenge/create', { fingerprint: dev.fingerprint, purpose: 'unlock' });
+  j = await r.json();
+  const cancelId = j.id;
+  const cancelNonce = Buffer.from(j.frame.nonce_b64, 'base64');
+  r = await post('/api/lan/challenge/cancel', { id: cancelId });
+  ok('POST /cancel ok', r.status === 200 && (await r.json()).ok === true);
+  const afterCancel = phoneSign({ id: cancelId, nonce: cancelNonce, purpose: 'unlock', key: dev.key, fingerprint: dev.fingerprint, ts: Date.now() });
+  r = await post('/api/lan/challenge/verify', { response: afterCancel });
+  j = await r.json();
+  ok('verify after cancel → unknown_challenge', j.ok === false && j.reason === 'unknown_challenge');
 
   await new Promise((res) => srv.close(res));
   db.close();

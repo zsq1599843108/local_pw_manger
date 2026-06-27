@@ -13,6 +13,8 @@
 //   POST /api/lan/challenge/verify  { response }
 //        -> { ok, purpose, biometric_ok }  on success
 //        -> { ok:false, reason, fallback_requested? }  otherwise
+//   POST /api/lan/challenge/cancel  { id }
+//        -> { ok:true }  (abandon a pending challenge; user declined fallback)
 
 'use strict';
 
@@ -74,6 +76,15 @@ function installLanChallengeRoutes(app, db, { verifier } = {}) {
       ...(result.fallbackRequested ? { fallback_requested: true } : {}),
       ...(result.purpose ? { purpose: result.purpose } : {}),
     });
+  });
+
+  // Abandon a pending challenge — the browser calls this when the user declines
+  // the fallback-PIN modal (design §7 step 2). Consuming the id stops a late
+  // RESPONSE for it from being honoured. Idempotent: unknown ids are a no-op.
+  app.post('/api/lan/challenge/cancel', (req, res) => {
+    const { id } = req.body || {};
+    v.cancel(id);
+    res.json({ ok: true });
   });
 
   return v;

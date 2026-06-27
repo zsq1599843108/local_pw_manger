@@ -53,6 +53,23 @@
             android:exported="true"
             android:label="Biometric Demo" />
 
+        <!--
+          M3'-B (B-3): invisible host for the biometric CHALLENGE prompt. Launched
+          by HotspotServerService when a paired PC sends CHALLENGE. Transparent
+          theme = only the system biometric sheet is visible. noHistory +
+          excludeFromRecents so it never lingers in the back stack / recents.
+          configChanges avoids a recreate mid-prompt (which would abort the
+          challenge). Not exported — only our own Service starts it.
+        -->
+        <activity
+            android:name=".ChallengePromptActivity"
+            android:exported="false"
+            android:theme="@style/Theme.PassMan.Transparent"
+            android:noHistory="true"
+            android:excludeFromRecents="true"
+            android:configChanges="orientation|screenSize|keyboardHidden|screenLayout" />
+
+
         <!-- Triggered ONLY by USB plug-in. Theme.NoDisplay = no UI at all. ⚠️ DEPRECATED on Win11. -->
         <activity
             android:name=".UsbAccessoryActivity"

@@ -10,10 +10,11 @@ android {
 
     defaultConfig {
         applicationId = "com.passman.pair"
-        // AOAP UsbAccessory has been available since API 12, but we lift the floor
-        // to 21 (Android 5.0) so we get unrestricted Kotlin stdlib + later (M4)
-        // EncryptedSharedPreferences without legacy multidex pain.
-        minSdk = 21
+        // M3'-B raises the floor to 30 (Android 11): the biometric CHALLENGE key
+        // import in Crypto.enrollDeviceHmacKey uses setUserAuthenticationParameters
+        // + AUTH_BIOMETRIC_STRONG, both API 30 (design §12). Below 30 those calls
+        // throw NoSuchMethodError, so 30 is the hard minimum, not a convenience.
+        minSdk = 30
         targetSdk = 35
         versionCode = 1
         versionName = "0.3-m1"

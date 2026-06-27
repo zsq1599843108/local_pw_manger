@@ -1,12 +1,21 @@
 package com.passman.pair
 
+import android.os.Build
+import android.security.keystore.KeyProperties
+import android.security.keystore.KeyProtection
+import android.security.keystore.StrongBoxUnavailableException
 import com.google.crypto.tink.subtle.Hkdf
 import com.google.crypto.tink.subtle.X25519
 import java.nio.ByteBuffer
+import java.security.KeyStore
 import java.security.SecureRandom
 import java.util.Arrays
 import javax.crypto.Cipher
+import javax.crypto.Mac
+import javax.crypto.SecretKey
+import javax.crypto.SecretKeyFactory
 import javax.crypto.spec.GCMParameterSpec
+import javax.crypto.spec.PBEKeySpec
 import javax.crypto.spec.SecretKeySpec
 
 /**
@@ -325,5 +334,253 @@ object Crypto {
         var diff = 0
         for (i in a.indices) diff = diff or (a[i].code xor b[i].code)
         return diff == 0
+    }
+
+    // ---------- M3'-B: biometric CHALLENGE / RESPONSE ----------
+    //
+    // The PC sends a CHALLENGE; the phone proves a live fingerprint by computing
+    // HMAC-SHA256(device_hmac_key, AAD) with a Keystore key that is unlocked only
+    // by a successful BiometricPrompt (timeout=0 → every use needs a fresh touch).
+    // See docs/m3b-biometric-challenge-design.md §4–§6.
+    //
+    // device_hmac_key provenance (deviation from design §5, decided 2026-06-25):
+    // §5 literally shows KeyGenerator.generateKey(), but a Keystore-*generated*
+    // key cannot be exported, so the PC could never hold the same key — yet §6
+    // requires a SYMMETRIC HMAC the PC can verify. We therefore IMPORT a 32B
+    // SecureRandom key (minted phone-side, also sent to the PC inside the
+    // encrypted PAIR_OK) via KeyStore.setEntry + KeyProtection. The bytes are
+    // identical on both ends; the Keystore copy adds the bio gate, nothing more.
+
+    private const val ANDROID_KEYSTORE = "AndroidKeyStore"
+    private const val HMAC_ALGO = "HmacSHA256"
+    private const val CHAL_AAD_PREFIX = "PassMan-CHAL-v1"   // 15 bytes (design comment "14B" is off-by-one)
+    const val CHAL_NONCE_SIZE = 32
+    const val CHAL_ID_HEX_LEN = 16                          // 16 ascii hex chars → 16 bytes
+    const val CHAL_FINGERPRINT_RAW_SIZE = 32                // SHA-256(pubkey) raw digest
+
+    /** Keystore alias for a phone's device HMAC key. One per phone identity. */
+    fun deviceHmacAlias(fpHex: String): String = "passman.device_hmac.$fpHex"
+
+    /** Map a challenge purpose string to its 1-byte AAD code (design §4). */
+    fun challengePurposeByte(purpose: String): Byte = when (purpose) {
+        "unlock"            -> 0x01
+        "sync_destructive"  -> 0x02
+        "export_plaintext"  -> 0x03
+        else -> throw IllegalArgumentException("unknown challenge purpose: $purpose")
+    }
+
+    /**
+     * Byte-exact AAD for the challenge HMAC (design §4). Mirror of
+     * buildChallengeAad in scripts/gen-m3b-challenge-vectors.js.
+     *
+     *   prefix(15) || id_utf8(16) || nonce(32) || purpose(1) || ts_be(8) || fp_raw(32) = 104B
+     *
+     * `fingerprintRaw` is the raw 32B SHA-256(pubkey) digest — i.e. hex-decode of
+     * the paired_devices fingerprint, NOT the 64-char hex string itself.
+     */
+    fun buildChallengeAad(
+        id: String,
+        nonce: ByteArray,
+        purpose: String,
+        tsMs: Long,
+        fingerprintRaw: ByteArray,
+    ): ByteArray {
+        val idBytes = id.toByteArray(Charsets.UTF_8)
+        require(idBytes.size == CHAL_ID_HEX_LEN) { "id must be $CHAL_ID_HEX_LEN ascii chars, got ${idBytes.size}" }
+        require(nonce.size == CHAL_NONCE_SIZE) { "nonce must be $CHAL_NONCE_SIZE bytes" }
+        require(fingerprintRaw.size == CHAL_FINGERPRINT_RAW_SIZE) { "fingerprint must be $CHAL_FINGERPRINT_RAW_SIZE raw bytes" }
+        val prefix = CHAL_AAD_PREFIX.toByteArray(Charsets.UTF_8)
+        val ts = ByteBuffer.allocate(8).putLong(tsMs).array()
+        val out = ByteArray(prefix.size + idBytes.size + nonce.size + 1 + ts.size + fingerprintRaw.size)
+        var p = 0
+        fun put(src: ByteArray) { System.arraycopy(src, 0, out, p, src.size); p += src.size }
+        put(prefix); put(idBytes); put(nonce)
+        out[p++] = challengePurposeByte(purpose)
+        put(ts); put(fingerprintRaw)
+        return out
+    }
+
+    /**
+     * Import a 32B raw HMAC key into the AndroidKeyStore under a bio-gated
+     * protection policy (design §5). Best-effort StrongBox: if the device has no
+     * StrongBox the entry is re-imported TEE-backed (risk B3). An existing entry
+     * for the same alias is overwritten so the Keystore copy always matches the
+     * key just handed to the PC.
+     *
+     * Throws only if even the TEE-backed import fails (e.g. no secure lock screen
+     * / no biometrics) — the caller treats that as "this phone can't do the main
+     * biometric path" and relies on the fallback PIN route (B-5).
+     */
+    fun enrollDeviceHmacKey(raw: ByteArray, fpHex: String, allowStrongBox: Boolean = true) {
+        require(raw.size == KEY_SIZE) { "device hmac key must be $KEY_SIZE bytes" }
+        val ks = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
+        val alias = deviceHmacAlias(fpHex)
+        val secret: SecretKey = SecretKeySpec(raw, HMAC_ALGO)
+
+        fun protection(strongBox: Boolean): KeyProtection =
+            KeyProtection.Builder(KeyProperties.PURPOSE_SIGN)
+                .setDigests(KeyProperties.DIGEST_SHA256)
+                .setUserAuthenticationRequired(true)
+                // timeout=0 → every Mac use needs a fresh BIOMETRIC_STRONG touch.
+                .setUserAuthenticationParameters(0, KeyProperties.AUTH_BIOMETRIC_STRONG)
+                // New/removed fingerprints invalidate the key → forces re-pair (§5/§9).
+                .setInvalidatedByBiometricEnrollment(true)
+                .apply {
+                    if (strongBox && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                        setIsStrongBoxBacked(true)
+                    }
+                }
+                .build()
+
+        try {
+            ks.setEntry(alias, KeyStore.SecretKeyEntry(secret), protection(allowStrongBox))
+        } catch (e: StrongBoxUnavailableException) {
+            // No StrongBox on this device — retry TEE-backed (risk B3).
+            ks.setEntry(alias, KeyStore.SecretKeyEntry(secret), protection(false))
+        }
+    }
+
+    /** True if a device HMAC key has been enrolled for this phone identity. */
+    fun hasDeviceHmacKey(fpHex: String): Boolean {
+        val ks = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
+        return ks.containsAlias(deviceHmacAlias(fpHex))
+    }
+
+    /** Remove the enrolled key (e.g. on un-pair). No-op if absent. */
+    fun deleteDeviceHmacKey(fpHex: String) {
+        val ks = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
+        val alias = deviceHmacAlias(fpHex)
+        if (ks.containsAlias(alias)) ks.deleteEntry(alias)
+    }
+
+    /**
+     * Build a Mac initialised with the bio-gated Keystore key, ready to be wrapped
+     * in a BiometricPrompt.CryptoObject. The actual HMAC (doFinal) only succeeds
+     * after the prompt authenticates — see BiometricChallengeSigner.
+     *
+     * May throw KeyPermanentlyInvalidatedException if the user changed their
+     * enrolled fingerprints (caller maps that to "re-pair required", §9).
+     */
+    fun initChallengeMac(fpHex: String): Mac {
+        val ks = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
+        val key = ks.getKey(deviceHmacAlias(fpHex), null) as SecretKey
+        return Mac.getInstance(HMAC_ALGO).apply { init(key) }
+    }
+
+    // ---------- M3'-B B-5: fallback 4-digit PIN (no-biometric soft door) ----------
+    //
+    // When a phone can't do strong biometrics (NO_HARDWARE / NONE_ENROLLED /
+    // HW_UNAVAILABLE, or a prior ERROR_LOCKOUT_PERMANENT), the user proves
+    // presence with a 4-digit fallback PIN typed ON THE PHONE (decided
+    // 2026-06-27, design §7). The phone compares it against a locally stored
+    // PBKDF2 hash and, on match, computes the challenge HMAC with the
+    // non-bio-gated key copy (EncryptedSharedPreferences — wired in the next
+    // B-5 commit). The PC still refuses high-sensitivity purposes whenever
+    // biometric_ok=false (§7), so this door only ever opens `unlock`.
+    //
+    // This is deliberately the "soft door": 4 digits = 10^4, so the real defence
+    // is the 3-tries / 24h FallbackPinTracker below, NOT the hash cost. PBKDF2
+    // (JCE built-in) is sufficient at this purpose; argon2 would add a dependency
+    // for no meaningful gain when the keyspace is 10^4 and lockout is the wall.
+
+    private const val PIN_PBKDF2_ALGO = "PBKDF2WithHmacSHA256"
+    const val FALLBACK_PIN_ITERATIONS = 120_000
+    const val FALLBACK_PIN_SALT_SIZE = 16
+    private const val FALLBACK_PIN_HASH_BITS = 256   // 32-byte derived hash
+
+    /** Fresh 16B salt for a newly-set fallback PIN (stored alongside the hash). */
+    fun randomFallbackSalt(): ByteArray =
+        ByteArray(FALLBACK_PIN_SALT_SIZE).also { SecureRandom().nextBytes(it) }
+
+    /**
+     * PBKDF2-HMAC-SHA256 of a fallback PIN → 32B hash. The PIN char[] is wiped
+     * after use (PBEKeySpec.clearPassword); the caller persists {salt, hash,
+     * iterations} in EncryptedSharedPreferences (design §8).
+     */
+    fun hashFallbackPin(pin: String, salt: ByteArray, iterations: Int = FALLBACK_PIN_ITERATIONS): ByteArray {
+        val spec = PBEKeySpec(pin.toCharArray(), salt, iterations, FALLBACK_PIN_HASH_BITS)
+        return try {
+            SecretKeyFactory.getInstance(PIN_PBKDF2_ALGO).generateSecret(spec).encoded
+        } finally {
+            spec.clearPassword()
+        }
+    }
+
+    /**
+     * Constant-time check of a submitted PIN against a stored PBKDF2 hash.
+     * Recomputes with the stored salt/iterations and compares in constant time
+     * so a wrong PIN leaks no timing signal beyond the (fixed) PBKDF2 cost.
+     */
+    fun verifyFallbackPin(
+        submittedPin: String,
+        salt: ByteArray,
+        expectedHash: ByteArray,
+        iterations: Int = FALLBACK_PIN_ITERATIONS,
+    ): Boolean = constantTimeEquals(hashFallbackPin(submittedPin, salt, iterations), expectedHash)
+
+    private fun constantTimeEquals(a: ByteArray, b: ByteArray): Boolean {
+        if (a.size != b.size) return false
+        var diff = 0
+        for (i in a.indices) diff = diff or (a[i].toInt() xor b[i].toInt())
+        return diff == 0
+    }
+
+    /**
+     * Lockout tracker for the fallback PIN path: 3 wrong PINs lock the channel
+     * for 24h (design §7). Same sliding-window model as PairAttemptTracker, but
+     * with a long window and a low failure ceiling because 4 digits is a tiny
+     * keyspace.
+     *
+     * snapshot()/restore() round-trip the failure timestamps so the next B-5
+     * commit can persist them in EncryptedSharedPreferences (design §8
+     * `fallback_lockout.failures`) and survive a service restart — otherwise a
+     * restart would reset the lockout and hand an attacker fresh tries.
+     */
+    class FallbackPinTracker(
+        val maxFailures: Int = 3,
+        val windowMs: Long = 24 * 60 * 60 * 1000L,   // 24h
+        private val clock: () -> Long = { System.currentTimeMillis() },
+    ) {
+        private val failures = ArrayList<Long>(4)
+
+        @Synchronized
+        fun isLocked(): Boolean {
+            prune()
+            return failures.size >= maxFailures
+        }
+
+        @Synchronized
+        fun recordFailure() {
+            failures.add(clock())
+            prune()
+        }
+
+        @Synchronized
+        fun reset() { failures.clear() }
+
+        @Synchronized
+        fun unlockInMs(): Long {
+            prune()
+            if (failures.size < maxFailures) return 0L
+            val earliestRelevant = failures[failures.size - maxFailures]
+            return maxOf(0L, earliestRelevant + windowMs - clock())
+        }
+
+        /** Failure timestamps (oldest first), pruned to the window — for ESP persistence. */
+        @Synchronized
+        fun snapshot(): LongArray { prune(); return failures.toLongArray() }
+
+        /** Reload failure timestamps from persisted state (design §8). */
+        @Synchronized
+        fun restore(timestamps: LongArray) {
+            failures.clear()
+            failures.addAll(timestamps.toList())
+            prune()
+        }
+
+        private fun prune() {
+            val cutoff = clock() - windowMs
+            while (failures.isNotEmpty() && failures[0] < cutoff) failures.removeAt(0)
+        }
     }
 }

@@ -36,11 +36,16 @@
 PC -> phone     CHALLENGE  { t:"CHALLENGE", id, nonce_b64, purpose }
 phone -> PC     RESPONSE   { t:"RESPONSE",  id, hmac_b64, ts, biometric_ok:true }
 phone -> PC     RESPONSE_  { t:"RESPONSE", id, error:"bio_failed"|"bio_unavailable"|
-                            "user_cancelled"|"unknown_purpose"|"unknown_device" }
+                            "user_cancelled"|"unknown_purpose"|"unknown_device"|
+                            "key_invalidated"|"bad_nonce" }
 phone -> PC     FALLBACK_REQ { t:"FALLBACK_REQ", id, reason:"bio_unavailable" }
 PC   -> phone   FALLBACK_PIN { t:"FALLBACK_PIN", id, pin:"1234" }
 phone -> PC     RESPONSE      ... biometric_ok:false（同上结构）
 ```
+
+> **B-3 实现新增两个 error code**（不在初稿 §3 枚举里，实现时发现需要）：
+> - `key_invalidated` — 用户改了指纹库 → Keystore key 作废（`KeyPermanentlyInvalidatedException`）→ PC 应提示「设备身份变了，请重新配对」（§9）。
+> - `bad_nonce` — CHALLENGE 的 `nonce_b64` 解不出 32B（协议违规，正常不会发生）。
 
 字段：
 
@@ -58,7 +63,7 @@ phone -> PC     RESPONSE      ... biometric_ok:false（同上结构）
 ## 4. HMAC 输入定义
 
 ```
-AAD = "PassMan-CHAL-v1"               // 14B 协议域分隔，防与其它 HMAC 用途串
+AAD = "PassMan-CHAL-v1"               // 15B 协议域分隔，防与其它 HMAC 用途串
     || id           (16B utf8 hex)
     || nonce        (32B raw)
     || purpose_byte (1B: 0x01 unlock / 0x02 sync_destructive / 0x03 export_plaintext)
@@ -93,6 +98,10 @@ val spec = KeyGenParameterSpec.Builder(
 KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_HMAC_SHA256, "AndroidKeyStore")
     .apply { init(spec) }
     .generateKey()
+// ⚠️ 实现偏离：实际未用 generateKey()。Keystore 内生成的 key 不可导出，PC 拿不到
+//    对称 HMAC 副本（违反 §6）。改为 SecureRandom 生成 32B raw → KeyStore.setEntry
+//    带 bio-gate 的 KeyProtection 导入，同一 raw 也发 PC。详见决策记录 2026-06-25
+//    及 Crypto.enrollDeviceHmacKey 注释。上方 spec 的 bio-gate 参数等价迁到 KeyProtection。
 ```
 
 要点：

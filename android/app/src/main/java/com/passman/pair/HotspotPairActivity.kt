@@ -58,6 +58,12 @@ class HotspotPairActivity : AppCompatActivity() {
     private lateinit var stopBtn: Button
     private lateinit var logView: TextView
 
+    // M3'-A pairing UI (TODO L47): rolling PIN display + "trust this PC" button.
+    // Shown only while a /socket handshake is active (service publishes
+    // activePairSecret post-handshake; cleared on socket end).
+    private lateinit var pairCardView: TextView
+    private lateinit var trustBtn: Button
+
     private val pollHandler = android.os.Handler(android.os.Looper.getMainLooper())
     private val pollRunnable = object : Runnable {
         override fun run() {
@@ -134,6 +140,30 @@ class HotspotPairActivity : AppCompatActivity() {
         btnRow.addView(stopBtn)
         root.addView(btnRow)
 
+        // ----- M3'-A pairing card: rolling PIN + trust button. Hidden when no
+        //       active socket has handshake-derived a pair_secret yet.
+        pairCardView = TextView(this).apply {
+            textSize = 16f
+            typeface = android.graphics.Typeface.MONOSPACE
+            gravity = Gravity.CENTER
+            setPadding(pad, pad, pad, pad / 2)
+            setBackgroundColor(0xFFF5F5DC.toInt())   // beige, distinct from grey log box
+            visibility = View.GONE
+        }
+        root.addView(pairCardView)
+
+        trustBtn = Button(this).apply {
+            text = "Trust this PC"
+            setOnClickListener {
+                HotspotServerService.userApprovesNext = true
+                log("→ user pressed TRUST; PAIR_REQUEST from PC will be accepted once")
+                // Re-render immediately so the user sees confirmation.
+                refreshStatus()
+            }
+            visibility = View.GONE
+        }
+        root.addView(trustBtn)
+
         Button(this).apply {
             text = "Open Biometric Demo"
             setOnClickListener {
@@ -196,6 +226,34 @@ class HotspotPairActivity : AppCompatActivity() {
 
         ipsView.text = "Local IPv4 addresses (any of these may be the PC's pairing target):\n" +
                        collectIpv4().joinToString("\n") { "  • $it" }
+
+        // M3'-A: render pairing card if a /socket handshake produced a
+        // pair_secret. Shows the rolling PIN the user reads into the PC, the
+        // peer fingerprint short prefix, and a Trust button that arms
+        // userApprovesNext for the next PAIR_REQUEST.
+        val secret = HotspotServerService.activePairSecret
+        val peerFp = HotspotServerService.activePeerFingerprint
+        if (secret != null && peerFp != null) {
+            val now = System.currentTimeMillis()
+            val w = Crypto.pinWindow(now)
+            val pin = Crypto.rollingPin(secret, w)
+            val secsLeftInWindow = ((w + 1) * Crypto.PIN_WINDOW_MS - now) / 1000
+            val approved = HotspotServerService.userApprovesNext
+            pairCardView.text = buildString {
+                append("📱 Pairing PIN (read into PC):\n")
+                append("    ").append(pin).append("\n")
+                append("    (refreshes in ${secsLeftInWindow}s)\n")
+                append("Peer fingerprint: ").append(peerFp.take(16)).append("…\n")
+                if (approved) append("✓ Trust armed — waiting for PC's PAIR_REQUEST")
+                else          append("Press TRUST after confirming the PC is yours.")
+            }
+            pairCardView.visibility = View.VISIBLE
+            trustBtn.visibility = View.VISIBLE
+            trustBtn.isEnabled = !approved
+        } else {
+            pairCardView.visibility = View.GONE
+            trustBtn.visibility = View.GONE
+        }
     }
 
     /** Iterates network interfaces and returns "iface=ip" strings for IPv4 addresses. */

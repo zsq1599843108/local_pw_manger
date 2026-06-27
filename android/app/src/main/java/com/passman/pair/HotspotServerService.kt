@@ -11,7 +11,10 @@ import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
+import android.util.Base64
 import android.util.Log
+import androidx.biometric.BiometricManager
+import androidx.biometric.BiometricPrompt
 import io.ktor.serialization.kotlinx.json.json
 import io.ktor.server.application.call
 import io.ktor.server.application.install
@@ -37,6 +40,9 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.long
 import kotlinx.serialization.json.put
+import kotlinx.coroutines.withTimeoutOrNull
+import java.security.MessageDigest
+import java.security.SecureRandom
 
 /**
  * M1' (ADR-002) — foreground service running a Ktor CIO server on :9876.
@@ -85,6 +91,22 @@ class HotspotServerService : Service() {
         @Volatile var lastError: String? = null
         @Volatile var running: Boolean = false
         @Volatile var startedAtMillis: Long = 0L
+
+        // M3'-A pairing UI surface. Populated when a /socket handshake completes;
+        // cleared when the socket ends. UI polls these to render the rolling
+        // PIN the user types into the PC. A second concurrent socket would
+        // overwrite — acceptable for v0.3 (one user, one phone, one pairing
+        // attempt at a time); the entry reset in handleEncryptedSocket gives
+        // us per-socket isolation of the *approval* gesture which is what
+        // matters for safety.
+        @Volatile var activePairSecret: ByteArray? = null
+        @Volatile var activePeerFingerprint: String? = null
+
+        // True once the user explicitly tapped "trust this PC" in HotspotPairActivity
+        // for the *current* handshake. UI sets this; the WS handler reads it on
+        // PAIR_REQUEST. Reset to false at socket entry AND on successful PAIR_OK
+        // so each trust press is one-shot.
+        @Volatile var userApprovesNext: Boolean = false
     }
 
     private var ktor: ApplicationEngine? = null
@@ -99,10 +121,37 @@ class HotspotServerService : Service() {
     // user rename their phone in the "trusted devices" panel.
     private val phoneLabel: String = android.os.Build.MODEL ?: "PassMan phone"
 
-    // True once the user explicitly tapped "trust this PC" in HotspotPairActivity
-    // for the *current* handshake. UI sets this via setUserApproves(); the
-    // WS handler reads it on PAIR_REQUEST. Reset to false on each new socket.
-    @Volatile var userApprovesNext: Boolean = false
+    // M3'-B B-1: per-device HMAC key for biometric CHALLENGE, handed to the PC
+    // once inside the encrypted PAIR_OK frame (design §8). We mint it lazily and
+    // cache it for this service lifetime.
+    //
+    // B-2 (done): on PAIR_OK the raw key is imported into the bio-gated
+    // AndroidKeyStore (Crypto.enrollDeviceHmacKey) so a later CHALLENGE can only
+    // sign after a live fingerprint.
+    //
+    // TODO(B-5): the key is still only minted in-memory here — there is NO
+    // no-bio-gate EncryptedSharedPreferences mirror yet, so a service restart
+    // mints a fresh key and forces a re-ENROLL on the next connection (design §9
+    // handles this gracefully, but the fallback PIN path needs the persisted
+    // mirror to recompute the same HMAC — see design §8).
+    @Volatile private var deviceHmacKey: ByteArray? = null
+    private val secureRandom = SecureRandom()
+
+    /** 32B HMAC key as base64 (NO_WRAP), minted once per service lifetime. */
+    @Synchronized
+    private fun deviceHmacKeyB64(): String {
+        val key = deviceHmacKey ?: ByteArray(32).also {
+            secureRandom.nextBytes(it)
+            deviceHmacKey = it
+        }
+        return Base64.encodeToString(key, Base64.NO_WRAP)
+    }
+
+    /** Snapshot of whether strong (Class 3) biometrics are usable right now. */
+    private fun biometricCapable(): Boolean =
+        BiometricManager.from(this)
+            .canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_STRONG) ==
+            BiometricManager.BIOMETRIC_SUCCESS
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -181,7 +230,7 @@ class HotspotServerService : Service() {
                     webSocket("/socket") {
                         handleEncryptedSocket(
                             tracker = this@HotspotServerService.pinTracker,
-                            userApproves = { this@HotspotServerService.userApprovesNext },
+                            userApproves = { userApprovesNext },
                             phoneLabel = this@HotspotServerService.phoneLabel,
                         )
                     }
@@ -225,6 +274,15 @@ class HotspotServerService : Service() {
         userApproves: () -> Boolean,
         phoneLabel: String,
     ) {
+        // Per-socket reset of the service-level "user pressed trust" flag.
+        // The flag is shared across sockets (one user, one trust button), so
+        // if socket A solicited trust but dropped before sending PAIR_REQUEST,
+        // we must clear stale approval before socket B starts — otherwise B's
+        // PAIR_REQUEST would inherit a yes the user did not give for THIS
+        // connection. Race-safe: any concurrent click on the trust button
+        // runs on the main thread and would land *after* this reset.
+        userApprovesNext = false
+
         val kp = Crypto.generateKeypair()
         val noncePhone = Crypto.randomNonce()
         var channel: Crypto.SecureChannel? = null
@@ -260,6 +318,10 @@ class HotspotServerService : Service() {
                         val derived = Crypto.deriveSessionKey(kp.privateKey, peerPub, noncePc, noncePhone)
                         channel = Crypto.SecureChannel(derived.aesKey)
                         pairSecret = derived.pairSecret
+                        // Surface to UI so it can render the rolling PIN the
+                        // user reads off the phone screen. Cleared in finally{}.
+                        activePairSecret = derived.pairSecret
+                        activePeerFingerprint = Crypto.fingerprintHex(peerPub)
 
                         val welcome = buildJsonObject {
                             put("t", "WELCOME")
@@ -311,6 +373,14 @@ class HotspotServerService : Service() {
                                     reply = ::replyEncrypted,
                                 )
                             }
+                            "CHALLENGE" -> {
+                                handleChallenge(
+                                    req = req,
+                                    fingerprintHex = fingerprint,
+                                    myPubkey = kp.publicKey,
+                                    reply = ::replyEncrypted,
+                                )
+                            }
                             else -> {
                                 // Unknown but well-formed & authenticated: log and drop.
                                 Log.w(TAG, "unknown msg type, dropping: ${req["t"]}")
@@ -326,6 +396,10 @@ class HotspotServerService : Service() {
             channel?.close()
             // Wipe pair_secret (HKDF derivative — small, but habit).
             pairSecret?.let { java.util.Arrays.fill(it, 0.toByte()) }
+            // Tear down UI-visible state so a disconnected socket doesn't
+            // leave a stale PIN on screen.
+            activePairSecret = null
+            activePeerFingerprint = null
         }
     }
 
@@ -385,12 +459,153 @@ class HotspotServerService : Service() {
             return
         }
         tracker.reset()
+        // Consume the approval gesture: even if this socket stays alive and
+        // somehow tries another PAIR_REQUEST, the user has to press trust
+        // again. Pairs with the per-socket reset at the top of
+        // handleEncryptedSocket() to give one-trust-per-attempt semantics.
+        userApprovesNext = false
+        // B-2: mint (B-1) + enroll the key into the bio-gated AndroidKeyStore so
+        // a later CHALLENGE can compute its HMAC only after a live fingerprint.
+        // `fingerprint` is THIS phone's identity → the Keystore alias. Best-effort:
+        // a phone with no secure lock screen / no biometrics can't back the key, so
+        // we log and still hand the PC the key, leaving the fallback PIN path (B-5)
+        // to cover it. Re-enrolling on every PAIR_OK keeps the Keystore copy equal
+        // to whatever key we just sent the PC.
+        val hmacKeyB64 = deviceHmacKeyB64()
+        deviceHmacKey?.let { raw ->
+            try {
+                Crypto.enrollDeviceHmacKey(raw, fingerprint)
+            } catch (t: Throwable) {
+                Log.w(TAG, "enrollDeviceHmacKey failed (fallback PIN path only): ${t.message}")
+            }
+        }
         reply(buildJsonObject {
             put("t", "PAIR_OK")
             put("fingerprint", fingerprint)
             put("label", phoneLabel)
+            // M3'-B: hand the PC the per-device HMAC key + a snapshot of whether
+            // this phone can do strong biometrics, so it knows whether to offer
+            // biometric CHALLENGE later (design §8/§9).
+            put("device_hmac_key_b64", hmacKeyB64)
+            put("biometric_capable", biometricCapable())
         })
         Log.i(TAG, "WS /socket: PAIR_OK to PC, fingerprint=${fingerprint.take(16)}…")
+    }
+
+    /**
+     * M3'-B B-3 CHALLENGE dispatcher (design §3/§6/§10). Validates the request,
+     * builds the §4 AAD, drives a BiometricPrompt via ChallengePromptActivity,
+     * and replies RESPONSE { hmac, ts, biometric_ok } or RESPONSE { error }.
+     *
+     * `fingerprintHex` / `myPubkey` are THIS connection's identity — the Keystore
+     * alias and the AAD fingerprint, respectively. Because M3'-A still mints an
+     * ephemeral keypair per connection (persistent identity is M4'), the bio key
+     * is only findable on the same connection that paired (and enrolled) it; a
+     * reconnect changes the fingerprint and yields error=unknown_device until M4'.
+     *
+     * When the phone has no usable strong biometrics we emit FALLBACK_REQ so the
+     * PC can start the 4-digit-PIN path; the PIN handling itself lands in B-5.
+     */
+    private suspend fun handleChallenge(
+        req: JsonObject,
+        fingerprintHex: String,
+        myPubkey: ByteArray,
+        reply: suspend (JsonObject) -> Unit,
+    ) {
+        val id = req["id"]?.jsonPrimitive?.content
+        if (id == null || id.length != Crypto.CHAL_ID_HEX_LEN) {
+            // Can't echo a malformed id back meaningfully — drop and let the PC
+            // time out rather than answer an unparseable challenge.
+            Log.w(TAG, "CHALLENGE with bad id, dropping")
+            return
+        }
+
+        fun respondError(error: String) = buildJsonObject {
+            put("t", "RESPONSE"); put("id", id); put("error", error)
+        }
+
+        val purpose = req["purpose"]?.jsonPrimitive?.content
+        if (purpose == null || runCatching { Crypto.challengePurposeByte(purpose) }.isFailure) {
+            reply(respondError("unknown_purpose")); return
+        }
+        val nonce = req["nonce_b64"]?.jsonPrimitive?.content?.let {
+            try { Crypto.b64decode(it) } catch (e: Exception) { null }
+        }
+        if (nonce == null || nonce.size != Crypto.CHAL_NONCE_SIZE) {
+            reply(respondError("bad_nonce")); return
+        }
+
+        // No usable strong biometrics → ask the PC to begin the fallback PIN path.
+        if (!biometricCapable()) {
+            reply(buildJsonObject {
+                put("t", "FALLBACK_REQ"); put("id", id); put("reason", "bio_unavailable")
+            })
+            return
+        }
+        // Key not enrolled for this identity (e.g. challenged on a different
+        // connection than the one that paired — see the ephemeral-keypair note).
+        if (!Crypto.hasDeviceHmacKey(fingerprintHex)) {
+            reply(respondError("unknown_device")); return
+        }
+
+        // Phone picks ts; the AAD binds it, and the PC checks |ts - now| < 30s.
+        val ts = System.currentTimeMillis()
+        val fingerprintRaw = MessageDigest.getInstance("SHA-256").digest(myPubkey)
+        val aad = try {
+            Crypto.buildChallengeAad(id, nonce, purpose, ts, fingerprintRaw)
+        } catch (e: Exception) {
+            Log.w(TAG, "buildChallengeAad failed: ${e.message}")
+            reply(respondError("bad_nonce")); return
+        }
+
+        // Hand off to the prompt Activity and await the signed HMAC.
+        // TODO(hardening): launching an Activity from a Service is restricted on
+        // Android 12+ background. Pairing is interactive so the foreground-app
+        // exemption applies; the truly-backgrounded case needs a
+        // full-screen-intent notification.
+        val deferred = ChallengeBridge.enqueue(ChallengeBridge.Request(id, fingerprintHex, aad))
+        try {
+            startActivity(Intent(this, ChallengePromptActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                putExtra(ChallengePromptActivity.EXTRA_CHALLENGE_ID, id)
+            })
+        } catch (t: Throwable) {
+            Log.w(TAG, "could not launch ChallengePromptActivity: ${t.message}")
+            ChallengeBridge.cancel(id)
+            reply(respondError("bio_unavailable")); return
+        }
+
+        // §10: 30s challenge window. Give the prompt headroom; the PC enforces
+        // the real freshness bound on ts anyway.
+        val result = withTimeoutOrNull(60_000L) { deferred.await() }
+        if (result == null) {
+            ChallengeBridge.cancel(id)
+            reply(respondError("user_cancelled")); return
+        }
+
+        when (result) {
+            is BiometricChallengeSigner.Result.Success -> reply(buildJsonObject {
+                put("t", "RESPONSE")
+                put("id", id)
+                put("hmac_b64", Crypto.b64encode(result.hmac))
+                put("ts", ts)
+                put("biometric_ok", true)
+            })
+            is BiometricChallengeSigner.Result.KeyInvalidated ->
+                // Fingerprints changed since pairing → PC must prompt a re-pair (§9).
+                reply(respondError("key_invalidated"))
+            is BiometricChallengeSigner.Result.Error ->
+                reply(respondError(mapBiometricError(result)))
+        }
+    }
+
+    /** Map a signer Error to one of the §3 RESPONSE error codes. */
+    private fun mapBiometricError(err: BiometricChallengeSigner.Result.Error): String = when (err.androidCode) {
+        BiometricPrompt.ERROR_USER_CANCELED,
+        BiometricPrompt.ERROR_NEGATIVE_BUTTON,
+        BiometricPrompt.ERROR_CANCELED -> "user_cancelled"
+        // TODO(B-5): ERROR_LOCKOUT_PERMANENT should switch to the fallback PIN path.
+        else -> "bio_failed"
     }
 
     private fun shutdownServer() {

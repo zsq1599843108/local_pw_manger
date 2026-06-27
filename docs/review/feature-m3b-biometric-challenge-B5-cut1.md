@@ -47,7 +47,15 @@ main 基线: `0f5cba4`
 - `1090b52` 上仍 `if (strongBox && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P)`。`KeyProtection.Builder#setIsStrongBoxBacked` 是 API 31，minSdk=30 → lint NewApi=error + API 30 真机 `NoSuchMethodError`（详见 B-3/B-4 报告）。
 - 第二刀本就重写 Crypto.kt，**请一并把这行改 `>= Build.VERSION_CODES.S`**。B-5 第一刀未引入新 API-level 问题（`PBKDF2WithHmacSHA256`=API26 < minSdk30 OK）。
 
-## 给用户的决策点（第二刀落地前需拍板，设计 §7 line 173）
+## ✅ 决策已定（2026-06-27，用户拍板）：§7 走**方案 C（加固）**
+
+用户在本次审查后明确选择 **方案 C**——fallback 不复用 `device_hmac_key`，改用**独立的 PIN-key `K_pin`**：
+- 手机：`K_bio`（Keystore，bio-gated）+ `K_pin`（EncryptedSharedPreferences，PIN-gated）两把独立 key。
+- PC：`paired_devices` 同存两把。`verify()` 先试 `K_bio` → 命中=biometric（允许全 purpose）；再试 `K_pin` → 命中=fallback（仅 unlock）；都不过 → reject。
+- **`biometric_ok` 字段降级为纯展示，不参与鉴权**——软门由「哪把 key 验过」密码学强制，受控手机无法谎报绕过。
+> 第二刀必须按此实现，**不要按下面原始 A/B/C 选项默认走 A**。下面三方案对照保留作背景。
+
+## 决策点原始三方案（背景，已选 C）
 
 **§7 fallback「双副本 hmac_key」是否按原设计接线？**
 - **方案 A（原设计，双副本）**：Keystore 存 bio-gated 主副本 + EncryptedSharedPreferences 存 non-bio 副本供 PIN 路径算 HMAC。软门强制力 = PC 信任 `biometric_ok` + 拒高敏 purpose。代价：受控手机可谎报绕过软门（已文档化，v0.4 可升级）。UX 好。
@@ -66,8 +74,11 @@ main 基线: `0f5cba4`
 - `node scripts/gen-m3b-challenge-vectors.js` 自检 → EXIT 0。
 - 未跑 `:app:lintDebug`：B-3 NewApi blocker 状态已静态确认（line 429 仍 `P`）；本刀未新增 API-level 调用。
 
-## 给 developer 的话（第二刀清单）
+## 给 developer 的话（第二刀清单，按方案 C）
 1. **先解 B-3**：`Crypto.kt:429` 守卫 `P`→`S`，跑 `:app:lintDebug` 确认 NewApi 清零。
-2. **等用户对上面决策点拍板**再接 fallback key——别默认按方案 A 闷头写。若用户选 C，PC 端 `verify` 的 purpose 策略要从「信 `biometric_ok`」改为「按验证密钥判定」。
-3. ESP 持久化（`device_hmac_key.fallback` / `fallback_pin.{hash,salt}` / `fallback_lockout.failures`）+ PIN 输入 Activity + `FallbackPinTracker.snapshot/restore` 接线，按 §8；这些属 instrumented，B-6 真机覆盖。
-4. 同步设计文档 argon2id→PBKDF2。
+2. **fallback 走方案 C（独立 K_pin）**：
+   - 手机：配对时除现有 bio-gated `K_bio` 外，再 `SecureRandom.nextBytes(32)` 生成**独立** `K_pin`，存 EncryptedSharedPreferences（PIN-gated，不入 Keystore bio）。PIN 校验通过后用 `K_pin` 算 challenge HMAC。
+   - PAIR_OK/ENROLL：把 `K_pin` 也交给 PC（schema 加列，如 `device_pin_hmac_key`）。
+   - PC `verify()`：先用 `K_bio`(`device_hmac_key`) 试 → 过则 `biometricOk=true`、允许全 purpose；不过再用 `K_pin` 试 → 过则 `biometricOk=false`、**仅 unlock**；都不过 reject。**purpose 策略改为由「哪把 key 验过」强制，删掉对 `response.biometric_ok` 字段的信任**（字段保留作展示/日志）。
+3. ESP 持久化（`device_hmac_key.fallback`→改为独立 `K_pin` / `fallback_pin.{hash,salt}` / `fallback_lockout.failures`）+ PIN 输入 Activity + `FallbackPinTracker.snapshot/restore` 接线，按 §8；instrumented，B-6 真机覆盖。
+4. 同步设计文档：argon2id→PBKDF2，并把 §7 双副本原案改记为「方案 C 独立 K_pin（2026-06-27 定）」。

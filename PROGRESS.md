@@ -2,21 +2,17 @@
 
 > Claude 进入项目时**第一个读这个文件**。每次离开前必须更新「上次离开时停在哪」和「下次回来要做的」。
 
-**last update**: 2026-07-02（B-5 第二刀 Android 端 @408b864；B-6/B-7 收尾：跨语言互验已闭合 + instrumented ESP/lockout 测试代码（编译过，运行留真机）+ 风险登记 §16 加状态列与新风险 B6-B9 + 真机实测清单文档。JVM 24/24、lint 0、JS 33/33。M3'-B 代码侧全部完成，余下纯真机验证）
+**last update**: 2026-07-02（M3'-B **全部 merge main 并 push origin** @`682f011`：B-1~B-7 代码侧完成。B-5 cut2+8cc24df @`09afeaa`、B-6/B-7 @`7b12640`→merge `682f011`。reviewer 复审全通过。余真机实测作为 release gate）
 
 ## 🎯 当前阶段
 
 正在做：**v0.3 — Wi-Fi 热点改造**
-- v0.3 整体进度：~82%
+- v0.3 整体进度：~88%
 - M3'-A：**✅ merged main** @ 712bf39（PIN 配对 + paired_devices TOFU）
-- M3'-B 设计：**✅ 设计稿已上 main**；§7 已翻案方案 C、§8 argon2id→PBKDF2（本轮同步）
-- M3'-B 实施（分支 `feature/m3b-biometric-challenge`）：
-  - **B-1/B-2/B-3 ✅**（B-3 P→S blocker 已修 @2ade2b4）
-  - **B-4 ✅** — PC 端 verify + challenge-ui
-  - **B-5 ✅** 第一刀（PC + Kotlin tracker）@1090b52 + 第二刀（Android 端）@408b864
-  - **B-6 ✅ 代码侧** — 跨语言互验闭合（向量测试 + PC fallback 全覆盖）+ instrumented ESP/lockout 测试（编译过，运行留真机）
-  - **B-7 ✅ 文档侧** — 风险登记 §16 更新 + 真机实测清单；余下纯真机验证
-  - 下个动作：**真机执行 `docs/m3b-biometric-challenge-testplan.md`** → 通过后 merge feature→main
+- M3'-B 设计：**✅ 设计稿已上 main**；§7 方案 C、§8 PBKDF2
+- M3'-B 实施：**✅ 全部 merged main** @ `682f011`（B-1~B-7 代码侧完成，reviewer 复审通过）
+  - B-5 cut2+8cc24df @`09afeaa`，B-6/B-7 @`7b12640`
+- 下个动作：**真机执行 `docs/m3b-biometric-challenge-testplan.md`**（release gate）；之后开 M3'-C（全量同步）
 
 ## 🔨 B-5 / 方案 C（2026-06-27）
 
@@ -54,20 +50,18 @@
 
 ## 📍 上次离开时停在哪
 
-- **里程碑**：M3'-B B-1~B-7 代码侧全部完成，待 commit B-6/B-7
+- **里程碑**：M3'-B 全部 merge main 并 push origin @ `682f011`（B-1~B-7 代码侧完成，reviewer 复审通过）
 - **代码状态**：
-  - `main` @ `51f3fcf`
-  - `feature/m3b-biometric-challenge` @ `408b864`（+ 本轮 B-6/B-7 未提交改动）
-  - 工作区：androidTest 新增 + build.gradle instrumentation + 设计 §16 + testplan 文档
-- **测试**：JVM 24/24、lint 0 error、JS 33/33、向量自检 0、androidTest 编译通过（instrumented 运行留真机）
-- **reviewer 状态**：B-5 第一刀 ✅；B-5 第二刀 + B-6/B-7 待审
+  - `main` @ `682f011` == `origin/main`（已 push）
+  - `feature/m3b-biometric-challenge` 保留（@ `7b12640`）
+  - 工作区干净
+- **release gate**：真机执行 `docs/m3b-biometric-challenge-testplan.md`（本环境做不了）
 
 ## ⏭️ 下次回来要做的
 
-1. **commit B-6/B-7**到 `feature/m3b-biometric-challenge`（不 push，交 reviewer）
-2. **真机执行** `docs/m3b-biometric-challenge-testplan.md`（§15 六验收 + §16 风险验证，本环境做不了）
-3. `:app:connectedDebugAndroidTest` 跑 instrumented ESP/lockout 测试
-4. reviewer 复核通过后 merge feature→main
+1. **真机实测** `docs/m3b-biometric-challenge-testplan.md`（§15 六验收 + §16 风险 + `:app:connectedDebugAndroidTest`）
+2. 真机通过后 v0.3 继续 **M3'-C（全量同步）**：PC `/api/sync/snapshot` + SYNC_PULL/SNAPSHOT/SYNC_PUSH 帧 + 冲突策略（last-write-wins）+ 1000 条 <1s 性能；手机端存储层设计待定
+3. M4'（UI+持久化）/ M5'（加固+发布）
 
 ## 🚧 阻塞 / 待解决
 

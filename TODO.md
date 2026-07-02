@@ -58,8 +58,9 @@
 - [x] **B-5** — fallback 4 位 PIN + 24h lockout（方案 C 独立 K_pin）+ reviewer 待办 #1（ESP 持久化）
   - 第一刀（PC + Kotlin tracker/PBKDF2）@ 1090b52 ✅
   - 第二刀（Android 端）✅ 本地绿：`computeChallengeHmac` + `FallbackSecretStore`(ESP) + `FallbackPinBridge`/`FallbackPinActivity` + Service 接线（PAIR_OK 带 `device_pin_key_b64` + 配对即设定 PIN + `handleFallbackPin` + `ERROR_LOCKOUT(_PERMANENT)`→FALLBACK_REQ）。JVM 24/24 / lint 0 / JS 33/33
-- [ ] **B-6** — 真机实测 fallback 全流程 + 跨语言 JVM 互验收尾（`ChallengeHmacVectorTest` 已消费向量；补 instrumented ESP/lockout 重启测试）
-- [ ] **B-7** — 风险登记 + CHANGELOG + 真机实测（指纹注册变更 / StrongBox 缺失降级 / Android 12+ 后台拉 Activity）
+- [x] **B-6** — 跨语言互验（代码侧）：`ChallengeHmacVectorTest` 消费向量 + PC `test-m3b-challenge.js` 33/33 覆盖 fallback 全验收点；instrumented `FallbackSecretStoreInstrumentedTest`（ESP round-trip + lockout 重启持久化，编译过运行留真机）
+- [x] **B-7** — 风险登记 §16 加状态列 + 新风险 B6-B9；真机实测清单 `docs/m3b-biometric-challenge-testplan.md`；CHANGELOG 同步。余下纯真机验证
+- [ ] **真机执行** `docs/m3b-biometric-challenge-testplan.md`（§15 六验收 + §16 风险 + `:app:connectedDebugAndroidTest`）→ 通过后 merge feature→main
 
 ⚠️ 已知依赖（非 B 缺陷）：M3'-A 每连接重生 keypair → CHALLENGE 仅同连接 Keystore 命中（持久身份 M4'）；Service 后台拉 prompt Activity 受 Android 12+ 限，依赖交互前台豁免
 

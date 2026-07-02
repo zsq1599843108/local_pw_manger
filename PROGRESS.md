@@ -2,7 +2,7 @@
 
 > Claude 进入项目时**第一个读这个文件**。每次离开前必须更新「上次离开时停在哪」和「下次回来要做的」。
 
-**last update**: 2026-07-02（B-5 第二刀 Android 端落地：K_pin 走 ESP、`computeChallengeHmac`、`FallbackSecretStore`、`FallbackPinBridge`+`FallbackPinActivity`、Service 接线 PAIR_OK 带 `device_pin_key_b64` + 配对即设定 PIN、`handleFallbackPin` 全流程、`ERROR_LOCKOUT(_PERMANENT)`→FALLBACK_REQ。JVM 24/24、lint 0 error、JS 33/33。ESP/Activity/Service 集成留 B-6 真机）
+**last update**: 2026-07-02（B-5 第二刀 Android 端 @408b864；B-6/B-7 收尾：跨语言互验已闭合 + instrumented ESP/lockout 测试代码（编译过，运行留真机）+ 风险登记 §16 加状态列与新风险 B6-B9 + 真机实测清单文档。JVM 24/24、lint 0、JS 33/33。M3'-B 代码侧全部完成，余下纯真机验证）
 
 ## 🎯 当前阶段
 
@@ -13,9 +13,10 @@
 - M3'-B 实施（分支 `feature/m3b-biometric-challenge`）：
   - **B-1/B-2/B-3 ✅**（B-3 P→S blocker 已修 @2ade2b4）
   - **B-4 ✅** — PC 端 verify + challenge-ui
-  - **B-5 ✅ 第一刀（PC + Kotlin tracker）+ 第二刀（Android 端）** — 见下
-  - B-6/B-7 ⏳ 未开（B-6 真机 + 跨语言 JVM 互验消费向量）
-- 下个动作：**B-6 真机实测 + 跨语言互验收尾**
+  - **B-5 ✅** 第一刀（PC + Kotlin tracker）@1090b52 + 第二刀（Android 端）@408b864
+  - **B-6 ✅ 代码侧** — 跨语言互验闭合（向量测试 + PC fallback 全覆盖）+ instrumented ESP/lockout 测试（编译过，运行留真机）
+  - **B-7 ✅ 文档侧** — 风险登记 §16 更新 + 真机实测清单；余下纯真机验证
+  - 下个动作：**真机执行 `docs/m3b-biometric-challenge-testplan.md`** → 通过后 merge feature→main
 
 ## 🔨 B-5 / 方案 C（2026-06-27）
 
@@ -53,19 +54,19 @@
 
 ## 📍 上次离开时停在哪
 
-- **里程碑**：M3'-B B-5 第二刀（Android 端）代码完成并本地编译/测试通过，待 commit
+- **里程碑**：M3'-B B-1~B-7 代码侧全部完成，待 commit B-6/B-7
 - **代码状态**：
   - `main` @ `51f3fcf`
-  - `feature/m3b-biometric-challenge` @ `8cc24df`（+ 本轮 B-5 第二刀未提交改动）
-  - 工作区：B-5 第二刀改动（Crypto/Service/FallbackSecretStore/FallbackPinBridge/FallbackPinActivity/Manifest/build.gradle + ChallengeHmacVectorTest）
-- **测试**：JVM 24/24、lint 0 error、JS 33/33、向量自检 0（本环境全绿）
-- **reviewer 状态**：B-5 第一刀 ✅；第二刀待审（ESP/Activity/Service 集成本环境无法 instrumented 测，留 B-6 真机）
+  - `feature/m3b-biometric-challenge` @ `408b864`（+ 本轮 B-6/B-7 未提交改动）
+  - 工作区：androidTest 新增 + build.gradle instrumentation + 设计 §16 + testplan 文档
+- **测试**：JVM 24/24、lint 0 error、JS 33/33、向量自检 0、androidTest 编译通过（instrumented 运行留真机）
+- **reviewer 状态**：B-5 第一刀 ✅；B-5 第二刀 + B-6/B-7 待审
 
 ## ⏭️ 下次回来要做的
 
-1. **commit B-5 第二刀**到 `feature/m3b-biometric-challenge`（不 push，交 reviewer）
-2. **B-6**：真机实测 fallback 全流程（指纹不可用 → FALLBACK_REQ → PC modal → FALLBACK_PIN → 手机 PIN 输入 → K_pin RESPONSE → PC verify biometricOk=false 仅 unlock）；跨语言 JVM 互验已部分（ChallengeHmacVectorTest 消费向量），补 instrumented ESP/lockout 重启测试
-3. **B-7**：风险登记 + CHANGELOG + 真机覆盖（指纹注册变更 / StrongBox 缺失降级 / Android 12+ 后台拉 Activity）
+1. **commit B-6/B-7**到 `feature/m3b-biometric-challenge`（不 push，交 reviewer）
+2. **真机执行** `docs/m3b-biometric-challenge-testplan.md`（§15 六验收 + §16 风险验证，本环境做不了）
+3. `:app:connectedDebugAndroidTest` 跑 instrumented ESP/lockout 测试
 4. reviewer 复核通过后 merge feature→main
 
 ## 🚧 阻塞 / 待解决

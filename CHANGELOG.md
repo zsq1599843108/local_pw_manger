@@ -4,6 +4,13 @@
 
 ## [Unreleased] — v0.3-dev (Wi-Fi 热点改造，前身 AOAP 已 deprecated)
 
+### Added (2026-07-02, M3'-B B-6/B-7 收尾 ✅，分支 `feature/m3b-biometric-challenge`)
+- B-6 跨语言互验：`ChallengeHmacVectorTest`（JVM 消费向量，AAD/HMAC 字节 == Node）已闭合；PC 端 `test-m3b-challenge.js` 33/33 覆盖 fallback 全验收点（K_pin unlock / 谎报 biometric_ok / K_pin export 拒绝 / FALLBACK_REQ resume / cancel / TTL / HTTP）
+- B-6 instrumented：`FallbackSecretStoreInstrumentedTest`（androidTest）覆盖 ESP round-trip + K_pin 幂等 + 3 错 PIN 锁定 + **lockout 跨服务重启持久化**（设计 §8 核心要求）+ NOT_SET 降级 + 重设 PIN 清锁。本环境编译通过，运行需真机 `:app:connectedDebugAndroidTest`
+- B-6 构建：`defaultConfig` 加 `testInstrumentationRunner`；androidTest 依赖 `androidx.test.ext:junit` + `runner` + `core`
+- B-7 风险登记：设计 §16 加「状态」列，B3/B4/B5 标 ✅ 已实现；新增 B6（配对不设 PIN 降级）/B7（pendingFallbacks 残留有界）/B8（ERROR_LOCKOUT 转 fallback 保守）/B9（后台拉 Activity 待 M4' 硬化）
+- B-7 真机实测清单：`docs/m3b-biometric-challenge-testplan.md`，对照 §15 六项验收标准 + §16 风险逐条可执行步骤
+
 ### Added (2026-07-02, M3'-B B-5 第二刀 Android 端 ✅，分支 `feature/m3b-biometric-challenge`)
 - 手机端：`Crypto.computeChallengeHmac(rawKey, aad)` —— 纯 `SecretKeySpec` HMAC（不走 Keystore），K_pin fallback 路径专用；字节镜像 `src/lan-challenge.js#computeChallengeHmac`
 - 手机端：`FallbackSecretStore` —— EncryptedSharedPreferences 封装，存 K_pin / `fallback_pin.{hash,salt,iterations}` / `fallback_lockout.failures`；`getOrCreatePinKey`（idempotent，不静默换 key）/ `setFallbackPin` / `verifyFallbackPin`（含 3/24h lockout 判定 + tracker 持久化）/ `restoreLockout`（服务启动恢复）

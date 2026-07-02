@@ -45,6 +45,7 @@
 | ⭐⭐ | `.../BiometricDemoActivity.kt` | 指纹认证 demo（M1 实测通过） |
 | ⭐⭐⭐ | `.../FallbackSecretStore.kt` | **B-5** ESP 封装：K_pin + PIN hash/salt + lockout 持久化 |
 | ⭐⭐⭐ | `.../FallbackPinBridge.kt` + `FallbackPinActivity.kt` | **B-5** PIN 输入 Activity（SET/VERIFY）+ service 桥 |
+| ⭐⭐ | `android/app/src/androidTest/.../FallbackSecretStoreInstrumentedTest.kt` | **B-6** ESP/lockout instrumented（真机跑） |
 | ⚠️ | `.../UsbAccessoryActivity.kt` | AOAP USB handler（Win 不可用，DEPRECATED） |
 | ⭐⭐ | `android/app/src/main/res/xml/accessory_filter.xml` | AOAP manufacturer/model 匹配（DEPRECATED 但留给 Linux/Mac） |
 | ⭐ | `android/settings.gradle.kts` | 含国内镜像（aliyun + 华为云） |
@@ -62,6 +63,8 @@
 - [ADR-002 Wi-Fi 热点](docs/adr-002-wifi-hotspot.md) — 选型决策（B 路线，2026-06-19）
 - [wifi-hotspot-design.md](docs/wifi-hotspot-design.md) — 协议 + 流程图 + 加密通道
 - [wifi-hotspot-roadmap.md](docs/wifi-hotspot-roadmap.md) — M1'~M5' 拆解（5 天预算）
+- [m3b-biometric-challenge-design.md](docs/m3b-biometric-challenge-design.md) — M3'-B 生物识别挑战设计（§7 方案 C 独立 K_pin）
+- [m3b-biometric-challenge-testplan.md](docs/m3b-biometric-challenge-testplan.md) — M3'-B 真机实测清单（B-6/B-7）
 
 ### 已 deprecated（保留作历史 + Linux/Mac 备选）
 - [AOAP 设计文档](docs/aoap-design.md) — v0.3 第一版（USB AOAP）

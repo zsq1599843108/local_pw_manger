@@ -299,13 +299,17 @@ ACTIVE
 
 ## 16. 风险登记
 
-| ID | 风险 | 缓解 |
-|---|---|---|
-| B1 | 用户加新指纹 → key 作废 → 必须重配对 → 抱怨 | UI 明示「为防偷加指纹，新增指纹需重新配对」 |
-| B2 | 部分国产 ROM 的 BiometricPrompt 弹出延迟 5s+ | 测试范围加 MIUI/HyperOS/HarmonyOS/ColorOS 各一台 |
-| B3 | StrongBox 在某些设备上不可用导致 KeyGen 抛异常 | try / fallback 到 TEE，不抛失败 |
-| B4 | 系统更新后 Keystore key 失效（罕见） | 捕获 `KeyPermanentlyInvalidatedException`，提示重配对 |
-| B5 | Fallback PIN 路径弱于生物识别（4 位、不过 TEE） | 方案 C：用独立 K_pin（非 K_bio 副本），PC 按「哪把 key 验过」判定且 K_pin 仅放行 unlock；biometric_ok 不参与鉴权，受控手机无法冒充强认证。仍保留 v0.4 升级到「错指纹直接拒、无 fallback」选项 |
+| ID | 风险 | 缓解 | 状态 |
+|---|---|---|---|
+| B1 | 用户加新指纹 → key 作废 → 必须重配对 → 抱怨 | UI 明示「为防偷加指纹，新增指纹需重新配对」 | 待 B-7 真机验 |
+| B2 | 部分国产 ROM 的 BiometricPrompt 弹出延迟 5s+ | 测试范围加 MIUI/HyperOS/HarmonyOS/ColorOS 各一台 | 待 B-7 真机验 |
+| B3 | StrongBox 在某些设备上不可用导致 KeyGen 抛异常 | try / fallback 到 TEE，不抛失败（`enrollDeviceHmacKey` 守卫 API31 + `StrongBoxUnavailableException` 回退） | ✅ 已实现 |
+| B4 | 系统更新后 Keystore key 失效（罕见） | 捕获 `KeyPermanentlyInvalidatedException`，提示重配对（`key_invalidated` error） | ✅ 已实现 |
+| B5 | Fallback PIN 路径弱于生物识别（4 位、不过 TEE） | 方案 C：用独立 K_pin（非 K_bio 副本），PC 按「哪把 key 验过」判定且 K_pin 仅放行 unlock；biometric_ok 不参与鉴权，受控手机无法冒充强认证。仍保留 v0.4 升级到「错指纹直接拒、无 fallback」选项 | ✅ 已实现 |
+| B6 | 配对即引导设定 PIN 是非阻塞的——用户可关闭 Activity 不设 PIN；后续 fallback 命中 `NOT_SET` → RESPONSE error | 可接受：bio 主路径仍可用，下次配对再提示；v0.4 可改为「PAIR_OK 后强制设 PIN 才完成配对」 | ✅ 已实现（接受该代价） |
+| B7 | `pendingFallbacks` 是 service 级共享 Map，socket 异常断开时残留 entry 不会被主动清理 | 由 PC 端 pending TTL（150s）+ RESPONSE/cancel 自然回收；单个 entry ≤ 104B，泄漏有界。v0.4 可在 socket finally 按 id 清 | ✅ 已实现（接受该代价） |
+| B8 | `ERROR_LOCKOUT`（临时锁定，非 PERMANENT）当前也转 fallback——理论上用户多试几次指纹会恢复，转 PIN 是保守但 UX 略损 | 保守正确：锁定期间无法用 bio，PIN 是唯一生路；锁定恢复后下次 CHALLENGE 自然回 bio 路径 | ✅ 已实现 |
+| B9 | Android 12+ 后台 Service 拉 Activity 受限（`handleChallenge`/`handleFallbackPin` 都 startActivity） | 配对/挑战是交互场景，前台 app 豁免通常适用；真正后台化需 full-screen-intent 通知（M4' 硬化） | ⚠️ 待 M4' 硬化 |
 
 ## 17. 与 M3'-C 的边界
 

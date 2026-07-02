@@ -18,6 +18,8 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = "0.3-m1"
+        // M3'-B B-6: instrumented tests (FallbackSecretStore ESP round-trip).
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     buildTypes {
@@ -85,4 +87,11 @@ dependencies {
     // mints a fresh K_pin (which the PC would reject) nor resets the 24h lockout
     // (design §8). K_bio is NEVER written here (it stays Keystore-only).
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
+
+    // M3'-B B-6: instrumented tests for FallbackSecretStore (ESP round-trip +
+    // lockout persistence across a simulated service restart). Runs on a
+    // device/emulator only — ESP + MasterKey need the Android framework.
+    androidTestImplementation("androidx.test.ext:junit:1.1.5")
+    androidTestImplementation("androidx.test:runner:1.5.2")
+    androidTestImplementation("androidx.test:core:1.5.0")
 }

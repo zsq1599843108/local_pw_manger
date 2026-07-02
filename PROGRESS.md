@@ -59,9 +59,13 @@
 
 ## ⏭️ 下次回来要做的
 
-1. **真机实测** `docs/m3b-biometric-challenge-testplan.md`（§15 六验收 + §16 风险 + `:app:connectedDebugAndroidTest`）
-2. 真机通过后 v0.3 继续 **M3'-C（全量同步）**：PC `/api/sync/snapshot` + SYNC_PULL/SNAPSHOT/SYNC_PUSH 帧 + 冲突策略（last-write-wins）+ 1000 条 <1s 性能；手机端存储层设计待定
-3. M4'（UI+持久化）/ M5'（加固+发布）
+**明天第一件事**：用户决定 M3'-B 真机实测 vs 直接开 M3'-C。两个选项：
+1. **真机实测 M3'-B**（需用户的 Android 设备）：执行 `docs/m3b-biometric-challenge-testplan.md` + `:app:connectedDebugAndroidTest`，作为 release gate
+2. **直接开 M3'-C（全量同步）**：从 main 切新 feature 分支。手机端存储层有设计分叉（M3'-C 是否在手机端建密码库），开做前需用户拍板
+
+其他：
+3. M3'-C 路线图：PC `/api/sync/snapshot` + SYNC_PULL/SNAPSHOT/SYNC_PUSH 帧 + 冲突策略（last-write-wins）+ 1000 条 <1s 性能
+4. M4'（UI+持久化）/ M5'（加固+发布）
 
 ## 🚧 阻塞 / 待解决
 

@@ -2,7 +2,7 @@
 // sqlite, so we don't touch data/passwords.db.
 //
 // Covers:
-//   1. schema_version is stamped at 4
+//   1. schema_version is stamped at 5
 //   2. trustDevice inserts and findByFingerprint round-trips pubkey bytes
 //   3. duplicate fingerprint throws (constraint)
 //   4. listDevices orders by trusted_at DESC
@@ -34,6 +34,7 @@ function freshDb() {
       trusted_at  INTEGER NOT NULL,
       last_seen   INTEGER NOT NULL,
       device_hmac_key   BLOB,
+      device_pin_key    BLOB,
       last_challenge_at INTEGER,
       last_fallback_at  INTEGER
     );
@@ -55,7 +56,7 @@ console.log('M3\'-A paired_devices repo tests:');
 {
   const db = freshDb();
   const v = db.prepare(`SELECT value FROM schema_meta WHERE key='schema_version'`).get();
-  ok('schema_version stamped at 4', v && v.value === '4');
+  ok('schema_version stamped at 5', v && v.value === '5');
 }
 
 // 7. fingerprintHex shape — do this first so we have a known fp for later cases.

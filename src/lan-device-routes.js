@@ -6,7 +6,7 @@
 // data/passwords.db).
 //
 // Endpoints:
-//   POST /api/lan/devices/trust          { fingerprint, pubkey_b64, label, device_hmac_key_b64? }
+//   POST /api/lan/devices/trust          { fingerprint, pubkey_b64, label, device_hmac_key_b64?, device_pin_key_b64? }
 //   GET  /api/lan/devices
 //   DELETE /api/lan/devices/:fingerprint
 //
@@ -15,10 +15,10 @@
 // pubkey or we reject — defends against a compromised page silently
 // re-labelling an existing trusted device.
 //
-// M3'-B adds an optional `device_hmac_key_b64` (32B base64) carried in the same
-// PAIR_OK frame. A phone with no biometrics may omit it and back-fill later via
-// the ENROLL_HMAC path (design §9), so its absence is allowed, but a malformed
-// value is rejected rather than silently dropped.
+// M3'-B adds two optional 32B keys carried in the same PAIR_OK frame:
+// `device_hmac_key_b64` (K_bio, bio-gated CHALLENGE) and `device_pin_key_b64`
+// (K_pin, the §7 方案-C fallback key). Either may be omitted (back-filled later
+// via ENROLL, design §9); a malformed value is rejected rather than dropped.
 
 'use strict';
 
@@ -36,11 +36,11 @@ function decodePubkey(b64) {
   } catch (_) { return null; }
 }
 
-// Decode the optional 32B HMAC key. Returns:
-//   undefined  -> field absent (allowed; device pairs without a key)
+// Decode an optional 32B key (HMAC K_bio or PIN K_pin). Returns:
+//   undefined  -> field absent (allowed; device pairs without that key)
 //   Buffer(32) -> valid key
 //   null       -> field present but malformed (caller must 400)
-function decodeHmacKey(b64) {
+function decodeKey32(b64) {
   if (b64 === undefined || b64 === null) return undefined;
   if (typeof b64 !== 'string') return null;
   try {
@@ -55,7 +55,7 @@ function decodeHmacKey(b64) {
  */
 function installLanDeviceRoutes(app, db) {
   app.post('/api/lan/devices/trust', (req, res) => {
-    const { fingerprint, pubkey_b64, label, device_hmac_key_b64 } = req.body || {};
+    const { fingerprint, pubkey_b64, label, device_hmac_key_b64, device_pin_key_b64 } = req.body || {};
     if (!looksLikeFingerprint(fingerprint)) {
       return res.status(400).json({ ok: false, error: 'bad_fingerprint' });
     }
@@ -63,9 +63,13 @@ function installLanDeviceRoutes(app, db) {
     if (!pubkey) {
       return res.status(400).json({ ok: false, error: 'bad_pubkey' });
     }
-    const hmacKey = decodeHmacKey(device_hmac_key_b64);
+    const hmacKey = decodeKey32(device_hmac_key_b64);
     if (hmacKey === null) {
       return res.status(400).json({ ok: false, error: 'bad_hmac_key' });
+    }
+    const pinKey = decodeKey32(device_pin_key_b64);
+    if (pinKey === null) {
+      return res.status(400).json({ ok: false, error: 'bad_pin_key' });
     }
     const computed = pairedDevices.fingerprintHex(pubkey);
     if (computed !== fingerprint) {
@@ -82,17 +86,20 @@ function installLanDeviceRoutes(app, db) {
         return res.status(409).json({ ok: false, error: 'pubkey_collision' });
       }
       pairedDevices.touchLastSeen(db, fingerprint);
-      // Back-fill the HMAC key for a device trusted before it had one (§9).
-      // enrollHmacKey only writes when the stored key is NULL — a re-pair that
-      // tries to swap an existing key is silently ignored here (treated as an
-      // attack by the future ENROLL_HMAC flow), not surfaced as an error.
+      // Back-fill keys for a device trusted before it had them (§9). enroll*Key
+      // only writes when the stored value is NULL — a re-pair that tries to swap
+      // an existing key is silently ignored (treated as an attack by ENROLL),
+      // not surfaced as an error.
       if (hmacKey && existing.device_hmac_key == null) {
         pairedDevices.enrollHmacKey(db, fingerprint, hmacKey);
+      }
+      if (pinKey && existing.device_pin_key == null) {
+        pairedDevices.enrollPinKey(db, fingerprint, pinKey);
       }
       return res.json({ ok: true, status: 'already_trusted', fingerprint, label: existing.label });
     }
     try {
-      pairedDevices.trustDevice(db, { fingerprint, label: safeLabel, pubkey, deviceHmacKey: hmacKey });
+      pairedDevices.trustDevice(db, { fingerprint, label: safeLabel, pubkey, deviceHmacKey: hmacKey, devicePinKey: pinKey });
     } catch (e) {
       return res.status(500).json({ ok: false, error: 'db_error', detail: e.message });
     }
@@ -105,10 +112,11 @@ function installLanDeviceRoutes(app, db) {
       label: r.label,
       trusted_at: r.trusted_at,
       last_seen: r.last_seen,
-      // Surface whether the device can do biometric CHALLENGE without leaking
-      // the key bytes themselves. The challenge UI uses this to decide whether
-      // to offer biometric unlock or fall straight to the PIN path.
+      // Surface whether the device can do biometric CHALLENGE and/or the PIN
+      // fallback without leaking key bytes. The challenge UI uses these to
+      // decide which paths to offer.
       has_hmac_key: r.device_hmac_key != null,
+      has_pin_key: r.device_pin_key != null,
       last_challenge_at: r.last_challenge_at ?? null,
       last_fallback_at: r.last_fallback_at ?? null,
     }));
@@ -128,5 +136,5 @@ function installLanDeviceRoutes(app, db) {
 module.exports = {
   installLanDeviceRoutes,
   // Exported for unit tests that want to assert validation pieces directly.
-  _internal: { looksLikeFingerprint, decodePubkey, decodeHmacKey },
+  _internal: { looksLikeFingerprint, decodePubkey, decodeKey32 },
 };

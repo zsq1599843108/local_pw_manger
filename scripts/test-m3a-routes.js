@@ -21,6 +21,7 @@ function freshDb() {
       trusted_at  INTEGER NOT NULL,
       last_seen   INTEGER NOT NULL,
       device_hmac_key   BLOB,
+      device_pin_key    BLOB,
       last_challenge_at INTEGER,
       last_fallback_at  INTEGER
     );

@@ -56,7 +56,7 @@ phone -> PC     RESPONSE      ... biometric_ok:false（同上结构）
 | `purpose` | enum: `unlock` \| `sync_destructive` \| `export_plaintext` | 进 HMAC AAD；防同一 nonce 跨用途换义 |
 | `ts` | int64 ms | 手机响应时刻；PC 校验 `\|ts - now\| < 30s` |
 | `hmac_b64` | base64(32B) | `HMAC-SHA256(device_hmac_key, AAD)`，AAD 见 §4 |
-| `biometric_ok` | bool | TEE 担保；走 Keystore 时只能是 true（false 走 fallback 路径） |
+| `biometric_ok` | bool | **纯展示，PC 不信任**（方案 C）。PC 由「K_bio 还是 K_pin 验过 HMAC」判定 bio/fallback，不读此字段 |
 
 `FALLBACK_PIN` 只在手机端 `BiometricManager.canAuthenticate()` 返回非 SUCCESS 时使用（无硬件 / 未录入指纹 / 临时不可用）。回退是**4 位 PIN**，沿用 v0.2 的 token 路径——与 M3'-A 的 6 位配对 PIN **不同**，目的是给"指纹临时坏了"留生路，不应等价于身份证明。详见 §7。
 
@@ -160,17 +160,20 @@ PC                                  Phone (Ktor)              Android Keystore
 手机端流程：
 1. 不要尝试 `BiometricPrompt`，直接发 `FALLBACK_REQ`
 2. PC 端 phone.html 弹一个**用户必须手动确认**的 modal：「这台手机指纹临时不可用，是否允许走 4 位 PIN？」
-3. 用户确认后 PC 发 `FALLBACK_PIN`，手机端在 UI 弹输入框，用户输入 4 位 → 手机本地比对
-4. 手机回 `RESPONSE { biometric_ok: false, hmac... }`，HMAC 仍然计算（用同一个 hmac_key，但 key 此时没法用 Keystore 解锁，所以兜底路径下 hmac_key 必须**有第二份不带 bio gate 的副本**——见下）
+3. 用户确认后 PC 发 `FALLBACK_PIN { id }`（仅「放行」信号，**不带 PIN 值**）；手机端弹输入框，用户输入 4 位 → **手机本地比对**（PBKDF2 哈希，见 §8）
+4. 比对通过后，手机用 **K_pin（独立的非 bio-gate 兜底密钥，≠ K_bio）** 对同一 AAD 计算 HMAC，回 `RESPONSE { hmac, ts, biometric_ok:false }`
 
-**这是兜底路径的"软门"代价**：4 位 PIN 不通过 TEE，等价于 v0.2 token。所以：
-- PC 端必须在 paired_devices 标记「该设备最近一次走的是 fallback」，UI 显式提示
-- `purpose=sync_destructive`/`export_plaintext` 在 fallback 路径下**一律拒绝**，只允许 `unlock`
-- fallback PIN 错 3 次 → 该设备 fallback 通道锁 24 小时（远比 6 位 PIN 配对宽松，因为只剩 4 位 = 10⁴ 容量）
+### 方案 C（加固，2026-06-27 拍板）—— 兜底用独立密钥，软门由密码学强制
 
-**hmac_key 的双副本**：Keystore 里那把是 bio-gated；同时把同一把 key 用 `EncryptedSharedPreferences` 存一份（无 bio gate），仅供 fallback 路径计算 HMAC 用。这看似削弱安全，但**真正的访问控制点不在手机本地**——是 PC 端对 `biometric_ok` 字段的 trust 决策（fallback 路径下 PC 拒绝高敏 purpose）。Keystore 副本仍然是主路径，硬件保护原值。
+配对时手机除 bio-gated 的 **K_bio**（Keystore，CHALLENGE 主路径）外，**另外独立生成一把 K_pin**，存 `EncryptedSharedPreferences`（无 bio gate），并把两把 key 都交给 PC（PAIR_OK 两个字段 + paired_devices 两列）。
 
-> **此处需要用户确认**：双副本方案可接受吗？或者更保守的"指纹坏掉 → 完全不让连，必须回到 PC 端原 4 位 token 流程"。后者实现简单但 UX 较糟。
+- **PC 用「哪把 key 验过」判定 bio/fallback，不信任 `biometric_ok` 字段**：verify() 先试 K_bio（放行全部 purpose），失败且 `purpose=unlock` 时再试 K_pin（仅 unlock）。`biometric_ok` 降级为**纯展示**，不参与鉴权。
+- 后果：受控 / root 手机即便谎报 `biometric_ok:true`，也算不出 K_bio 的 HMAC（K_bio 永不出 Keystore，ESP 里没有它的副本），PC 自然落到 K_pin 路径 → 只放行 unlock。`sync_destructive` / `export_plaintext` 的 RESPONSE 根本不会用 K_pin 去试 → 密码学上锁死，软门无法被冒充成强认证。
+- K_bio **绝不**写进 ESP（否则 root 读出即可无指纹算出 K_bio HMAC，等于拆掉 bio gate）。这正是放弃早期「双副本方案 A」的原因。
+
+**软门代价仍在**（4 位 PIN 不过 TEE），所以：
+- PC 在 paired_devices 标记最近一次走 fallback（`last_fallback_at`），UI 显式提示
+- fallback PIN 错 3 次 → 该设备 fallback 通道锁 24 小时（10⁴ 容量，比 6 位配对 PIN 宽松）
 
 ## 8. 持久化变更
 
@@ -178,27 +181,32 @@ PC                                  Phone (Ktor)              Android Keystore
 
 ```sql
 -- v4 migration (M3'-B): 给已配对设备多一列 HMAC 密钥
-ALTER TABLE paired_devices ADD COLUMN device_hmac_key BLOB;
+ALTER TABLE paired_devices ADD COLUMN device_hmac_key BLOB;   -- K_bio
 ALTER TABLE paired_devices ADD COLUMN last_challenge_at INTEGER;
 ALTER TABLE paired_devices ADD COLUMN last_fallback_at INTEGER;
 
--- 兼容性：v3 已有的行 device_hmac_key 为 NULL；下次 CHALLENGE 时手机端会
--- 重新走一次 ENROLL_HMAC 流程把它补上（详见 §9 升级路径）
+-- v5 migration (M3'-B 方案 C): fallback 用独立的 K_pin（≠ K_bio）
+ALTER TABLE paired_devices ADD COLUMN device_pin_key BLOB;    -- K_pin
+
+-- 兼容性：v3 已有的行 device_hmac_key/device_pin_key 为 NULL；下次 CHALLENGE 时手机端会
+-- 重新走一次 ENROLL 流程把它补上（详见 §9 升级路径）
 ```
 
-`device_hmac_key` 是 32B 随机字节，由**手机端**生成（手机是 TEE 主人）：
-- 配对时手机端 `SecureRandom.nextBytes(32)` → 存 Keystore（HMAC import）+ 存 EncryptedSharedPreferences 副本
-- 通过 `PAIR_OK` 帧的扩展字段 `device_hmac_key_b64` 一次性传给 PC（在已加密 SecureChannel 内），PC 落 paired_devices.device_hmac_key
+`device_hmac_key`（K_bio）/ `device_pin_key`（K_pin）都是 32B 随机字节，由**手机端**生成（手机是 TEE 主人），两把**互相独立**：
+- 配对时手机端 `SecureRandom.nextBytes(32)` 各生成一把：K_bio 存 Keystore（HMAC import，bio-gated）；K_pin 存 EncryptedSharedPreferences（无 bio gate，仅 fallback 用）
+- 通过 `PAIR_OK` 帧的扩展字段 `device_hmac_key_b64` / `device_pin_key_b64` 一次性传给 PC（在已加密 SecureChannel 内），PC 落 paired_devices 两列
+- **K_bio 绝不写 ESP**；K_pin 绝不进 Keystore bio-gate（它本就是给指纹不可用时用的）
 
 ### 手机端 EncryptedSharedPreferences
 
 ```
-device_hmac_key.fallback   -> 32B raw (FALLBACK_PIN 路径用)
-device_hmac_key.bio_gated  -> 上面那把 key 的 Keystore alias 名 (字符串)
-fallback_pin.hash          -> argon2id(4-digit-pin, salt)  // 抗暴力破解
+device_pin_key             -> 32B raw K_pin（FALLBACK_PIN 路径计算 HMAC 用；≠ K_bio）
+fallback_pin.hash          -> PBKDF2-HMAC-SHA256(4-digit-pin, salt, 120k)  // 见下注
 fallback_pin.salt          -> 16B
 fallback_lockout.failures  -> 数组: [ts1, ts2, ts3]
 ```
+
+> **实现偏离（2026-06-27）**：§8 原写 `argon2id`，实现改用 **PBKDF2-HMAC-SHA256**（JCE 内置，免第三方依赖）。理由：4 位 PIN 的密钥空间只有 10⁴，真正防线是「3 次错 → 24h 锁」而非哈希成本；argon2 在此 purpose 下收益约等于零，却要多引一个库。详见 `Crypto.hashFallbackPin` 注释。
 
 ## 9. 与 M3'-A 的对接（升级路径）
 
@@ -207,15 +215,16 @@ PAIR_OK 帧扩展（**M3'-B 实现时改 M3'-A 的 Kotlin/JS 两端**）：
 ```
 现 PAIR_OK:  { t:"PAIR_OK", fingerprint, label }
 M3'-B 之后:  { t:"PAIR_OK", fingerprint, label,
-              device_hmac_key_b64,        // 32B 新生成
+              device_hmac_key_b64,        // 32B K_bio（bio-gated CHALLENGE）
+              device_pin_key_b64,         // 32B K_pin（方案 C 兜底，独立于 K_bio）
               biometric_capable: bool     // canAuthenticate 状态快照
             }
 ```
 
 升级语义：
-- 新装手机 + 新 PC → PAIR_OK 自带 hmac_key，schema_version=4，正常
-- v3 数据库 + v0.3-late 升级：迁移把 device_hmac_key 留 NULL；下次该设备连进来时，PC 端发 `ENROLL_HMAC_REQUEST`（只对已知 fingerprint）→ 手机端生成 + 回 `ENROLL_HMAC` 填空；用户在两端都确认（与首次配对同样的 TOFU 体验）
-- 不允许 hmac_key 静默更换：任何已有 hmac_key 的设备发 `ENROLL_HMAC` 都视作攻击，拒绝并提示用户「设备身份变了，请确认」
+- 新装手机 + 新 PC → PAIR_OK 自带 K_bio + K_pin，schema_version=5，正常
+- v3 数据库 + v0.3-late 升级：迁移把 device_hmac_key / device_pin_key 留 NULL；下次该设备连进来时走 ENROLL 回填（只对已知 fingerprint），用户两端确认（与首次配对同样的 TOFU 体验）
+- 不允许 key 静默更换：任何已有 K_bio/K_pin 的设备发 ENROLL 换 key 都视作攻击，拒绝并提示「设备身份变了，请确认」（PC 端 `enrollHmacKey`/`enrollPinKey` 仅在列为 NULL 时写入）
 
 ## 10. 状态机（M3'-A ACTIVE 内的子状态）
 
@@ -296,7 +305,7 @@ ACTIVE
 | B2 | 部分国产 ROM 的 BiometricPrompt 弹出延迟 5s+ | 测试范围加 MIUI/HyperOS/HarmonyOS/ColorOS 各一台 |
 | B3 | StrongBox 在某些设备上不可用导致 KeyGen 抛异常 | try / fallback 到 TEE，不抛失败 |
 | B4 | 系统更新后 Keystore key 失效（罕见） | 捕获 `KeyPermanentlyInvalidatedException`，提示重配对 |
-| B5 | Fallback PIN 双副本 hmac_key 削弱安全感 | §7 已论证 + 文档警示；保留 v0.4 升级到「无 fallback hmac_key，错指纹直接拒」 |
+| B5 | Fallback PIN 路径弱于生物识别（4 位、不过 TEE） | 方案 C：用独立 K_pin（非 K_bio 副本），PC 按「哪把 key 验过」判定且 K_pin 仅放行 unlock；biometric_ok 不参与鉴权，受控手机无法冒充强认证。仍保留 v0.4 升级到「错指纹直接拒、无 fallback」选项 |
 
 ## 17. 与 M3'-C 的边界
 

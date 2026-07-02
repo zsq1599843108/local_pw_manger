@@ -69,6 +69,20 @@
             android:excludeFromRecents="true"
             android:configChanges="orientation|screenSize|keyboardHidden|screenLayout" />
 
+        <!--
+          M3'-B (B-5): 4-digit fallback PIN entry (set-at-pairing + verify-on-
+          challenge). Launched by HotspotServerService when biometrics are
+          unavailable (FALLBACK_REQ) or during pairing to set the PIN. Own UI
+          (not transparent). Same noHistory/excludeFromRecents/configChanges
+          rationale as the prompt Activity. Not exported — only our Service.
+        -->
+        <activity
+            android:name=".FallbackPinActivity"
+            android:exported="false"
+            android:noHistory="true"
+            android:excludeFromRecents="true"
+            android:configChanges="orientation|screenSize|keyboardHidden|screenLayout" />
+
 
         <!-- Triggered ONLY by USB plug-in. Theme.NoDisplay = no UI at all. ⚠️ DEPRECATED on Win11. -->
         <activity

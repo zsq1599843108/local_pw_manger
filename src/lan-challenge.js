@@ -15,6 +15,13 @@
 // The device_hmac_key never leaves this process: the browser only ever sees a
 // `has_hmac_key` boolean (see lan-device-routes.js) and forwards opaque frames.
 // The real access-control point is here, on the PC.
+//
+// §7 方案 C: there are TWO keys per device — K_bio (device_hmac_key, bio-gated
+// on the phone) and K_pin (device_pin_key, the un-gated fallback key). The PC
+// decides biometric-vs-fallback by WHICH key verifies a RESPONSE, and ignores
+// the phone's biometric_ok flag entirely (display-only). K_pin is only ever
+// tried for `unlock`, so destructive purposes are cryptographically locked to
+// the bio-gated key.
 
 'use strict';
 
@@ -34,9 +41,10 @@ const PURPOSE_BYTE = Object.freeze({
   export_plaintext: 0x03,
 });
 
-// Purposes a fallback (non-biometric) RESPONSE is allowed to satisfy. The 4-digit
-// PIN path is a "soft door" (design §7) — it may unlock, but never authorise a
-// destructive sync or a plaintext export.
+// Purposes a fallback (K_pin / non-biometric) RESPONSE is allowed to satisfy.
+// The 4-digit PIN path is a "soft door" (design §7) — it may unlock, but the PC
+// never even tries K_pin for a destructive sync or plaintext export, so those
+// can only be authorised by the bio-gated K_bio.
 const FALLBACK_ALLOWED_PURPOSES = Object.freeze(new Set(['unlock']));
 
 // Freshness bound on the phone-chosen ts (design §6). The phone picks ts, the
@@ -169,6 +177,9 @@ class ChallengeVerifier {
    *   { t:'RESPONSE', id, error }                          (phone-side failure)
    *   { t:'FALLBACK_REQ', id, reason }                     (no biometrics → B-5)
    *
+   * NOTE: `biometric_ok` in the RESPONSE is display-only and NOT trusted — the
+   * returned `biometricOk` is derived from which key (K_bio vs K_pin) verified.
+   *
    * Returns { ok, reason, purpose, biometricOk, fallbackRequested }.
    * On any non-ok path the challenge id is consumed so it can't be retried.
    */
@@ -205,17 +216,9 @@ class ChallengeVerifier {
     }
 
     const device = pairedDevices.findByFingerprint(this._db, pending.fingerprint);
-    if (!device || device.device_hmac_key == null) {
+    if (!device || (device.device_hmac_key == null && device.device_pin_key == null)) {
       this._consume(id);
       return { ok: false, reason: 'no_hmac_key' };
-    }
-
-    const biometricOk = response.biometric_ok === true;
-
-    // §7 soft-door policy: a fallback (non-biometric) RESPONSE may only unlock.
-    if (!biometricOk && !FALLBACK_ALLOWED_PURPOSES.has(pending.purpose)) {
-      this._consume(id);
-      return { ok: false, reason: 'fallback_purpose_denied', purpose: pending.purpose, biometricOk };
     }
 
     // Freshness: the phone picks ts; reject anything outside ±skew.
@@ -225,8 +228,6 @@ class ChallengeVerifier {
       return { ok: false, reason: 'stale_ts', purpose: pending.purpose };
     }
 
-    // Recompute the AAD from the STORED fingerprint (not anything the phone
-    // sent) and the pending nonce/purpose, then constant-time compare the HMAC.
     let hmac;
     try {
       hmac = Buffer.from(response.hmac_b64, 'base64');
@@ -239,19 +240,38 @@ class ChallengeVerifier {
       return { ok: false, reason: 'bad_hmac', purpose: pending.purpose };
     }
 
+    // Recompute the AAD from the STORED fingerprint (not anything the phone
+    // sent) and the pending nonce/purpose, then constant-time compare.
     const fingerprintRaw = Buffer.from(pending.fingerprint, 'hex');
-    let expected;
+    let aad;
     try {
-      const aad = buildChallengeAad({
+      aad = buildChallengeAad({
         id, nonce: pending.nonce, purpose: pending.purpose, tsMs: ts, fingerprintRaw,
       });
-      expected = computeChallengeHmac(Buffer.from(device.device_hmac_key), aad);
     } catch (e) {
       this._consume(id);
       return { ok: false, reason: 'aad_error', purpose: pending.purpose };
     }
 
-    if (!crypto.timingSafeEqual(hmac, expected)) {
+    // §7 方案 C: the biometric-vs-fallback decision is made HERE, by which key
+    // verifies the HMAC — NOT by trusting the phone's biometric_ok flag (that
+    // field is display-only). A controlled/rooted phone can flip the flag, but
+    // it cannot produce a K_bio HMAC without a live fingerprint (K_bio is
+    // Keystore-bound, never copied to ESP), so the soft door is cryptographic.
+    //
+    // Try K_bio first → authorises ANY purpose. Only if that fails and the
+    // purpose is fallback-eligible (unlock) do we try K_pin → fallback. We do
+    // NOT try K_pin for sync_destructive/export_plaintext: those simply can't be
+    // satisfied without the bio-gated key, which is the whole point of §7.
+    const matches = (rawKey) =>
+      rawKey != null && crypto.timingSafeEqual(hmac, computeChallengeHmac(Buffer.from(rawKey), aad));
+
+    let biometricOk;
+    if (matches(device.device_hmac_key)) {
+      biometricOk = true;
+    } else if (FALLBACK_ALLOWED_PURPOSES.has(pending.purpose) && matches(device.device_pin_key)) {
+      biometricOk = false;
+    } else {
       this._consume(id);
       return { ok: false, reason: 'hmac_mismatch', purpose: pending.purpose };
     }

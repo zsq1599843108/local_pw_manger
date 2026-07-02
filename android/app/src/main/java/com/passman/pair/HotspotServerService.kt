@@ -34,12 +34,14 @@ import io.ktor.websocket.readBytes
 import io.ktor.websocket.readText
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.long
 import kotlinx.serialization.json.put
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import java.security.MessageDigest
 import java.security.SecureRandom
@@ -129,13 +131,35 @@ class HotspotServerService : Service() {
     // AndroidKeyStore (Crypto.enrollDeviceHmacKey) so a later CHALLENGE can only
     // sign after a live fingerprint.
     //
-    // TODO(B-5): the key is still only minted in-memory here — there is NO
-    // no-bio-gate EncryptedSharedPreferences mirror yet, so a service restart
-    // mints a fresh key and forces a re-ENROLL on the next connection (design §9
-    // handles this gracefully, but the fallback PIN path needs the persisted
-    // mirror to recompute the same HMAC — see design §8).
+    // B-5 (方案 C): K_bio stays Keystore-only and is NEVER persisted to ESP. The
+    // fallback path uses a SEPARATE K_pin (FallbackSecretStore.getOrCreatePinKey)
+    // so the PC can tell bio vs fallback apart by which key verified the HMAC
+    // (design §7). K_bio is still minted in-memory here for this service lifetime;
+    // a service restart forces a re-pair (acceptable under M3'-A's ephemeral
+    // keypair model; persistent identity is M4').
     @Volatile private var deviceHmacKey: ByteArray? = null
     private val secureRandom = SecureRandom()
+    private val ioScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO)
+
+    // M3'-B B-5: fallback secrets (K_pin + PIN hash/salt + lockout) in ESP, and
+    // the 3-fail/24h tracker restored from ESP on service start so a restart
+    // doesn't hand an attacker fresh tries (design §8).
+    private lateinit var fallbackStore: FallbackSecretStore
+    private val fallbackTracker = Crypto.FallbackPinTracker()
+
+    // M3'-B B-5: in-flight fallback challenges, keyed by challenge id. A
+    // FALLBACK_REQ keeps the PC's challenge pending (the PC reuses the same
+    // id/nonce for the post-PIN RESPONSE); we stash the bits needed to compute
+    // the K_pin HMAC when the user types the PIN. Removed on RESPONSE / cancel /
+    // socket close. One entry per active fallback; bounded by the PC's pending
+    // TTL (150s) in practice.
+    private data class PendingFallback(
+        val nonce: ByteArray,
+        val purpose: String,
+        val fingerprintHex: String,
+        val myPubkey: ByteArray,
+    )
+    private val pendingFallbacks = java.util.concurrent.ConcurrentHashMap<String, PendingFallback>()
 
     /** 32B HMAC key as base64 (NO_WRAP), minted once per service lifetime. */
     @Synchronized
@@ -158,6 +182,14 @@ class HotspotServerService : Service() {
     override fun onCreate() {
         super.onCreate()
         ensureNotificationChannel()
+        // B-5: ESP-backed fallback secrets + restore the 24h lockout so a service
+        // restart preserves the failure count (design §8).
+        fallbackStore = FallbackSecretStore(this)
+        try {
+            fallbackStore.restoreLockout(fallbackTracker)
+        } catch (t: Throwable) {
+            Log.w(TAG, "restoreLockout failed (starting fresh): ${t.message}")
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -381,6 +413,14 @@ class HotspotServerService : Service() {
                                     reply = ::replyEncrypted,
                                 )
                             }
+                            "FALLBACK_PIN" -> {
+                                handleFallbackPin(
+                                    req = req,
+                                    fingerprintHex = fingerprint,
+                                    myPubkey = kp.publicKey,
+                                    reply = ::replyEncrypted,
+                                )
+                            }
                             else -> {
                                 // Unknown but well-formed & authenticated: log and drop.
                                 Log.w(TAG, "unknown msg type, dropping: ${req["t"]}")
@@ -479,6 +519,25 @@ class HotspotServerService : Service() {
                 Log.w(TAG, "enrollDeviceHmacKey failed (fallback PIN path only): ${t.message}")
             }
         }
+        // B-5 (方案 C): mint the independent K_pin (ESP, no bio gate) and hand it
+        // to the PC alongside K_bio. The PC stores both and decides bio-vs-fallback
+        // by which key verifies a RESPONSE (design §7). We DON'T block PAIR_OK on
+        // the PIN-set prompt: the PIN is set asynchronously on first pairing and
+        // is only needed when a fallback CHALLENGE later arrives. If the user
+        // never sets one, a later FALLBACK_PIN yields NOT_SET → error (acceptable:
+        // the bio path still works, and re-pairing re-triggers the prompt).
+        val pinKeyB64 = try {
+            Crypto.b64encode(fallbackStore.getOrCreatePinKey())
+        } catch (t: Throwable) {
+            Log.w(TAG, "getOrCreatePinKey failed (ESP): ${t.message}")
+            null
+        }
+        if (pinKeyB64 != null && !fallbackStore.hasFallbackPin()) {
+            // Best-effort: ask the user to set a fallback PIN now so it's ready
+            // before fingerprints ever become unavailable. Non-blocking — PAIR_OK
+            // proceeds regardless; the PIN can still be set on the next pairing.
+            launchSetPinPrompt()
+        }
         reply(buildJsonObject {
             put("t", "PAIR_OK")
             put("fingerprint", fingerprint)
@@ -487,6 +546,10 @@ class HotspotServerService : Service() {
             // this phone can do strong biometrics, so it knows whether to offer
             // biometric CHALLENGE later (design §8/§9).
             put("device_hmac_key_b64", hmacKeyB64)
+            // B-5 方案 C: the independent fallback key. PC stores this in
+            // paired_devices.device_pin_key and only tries it for `unlock`.
+            if (pinKeyB64 != null) put("device_pin_key_b64", pinKeyB64)
+            else put("device_pin_key_b64", JsonNull)
             put("biometric_capable", biometricCapable())
         })
         Log.i(TAG, "WS /socket: PAIR_OK to PC, fingerprint=${fingerprint.take(16)}…")
@@ -536,7 +599,12 @@ class HotspotServerService : Service() {
         }
 
         // No usable strong biometrics → ask the PC to begin the fallback PIN path.
+        // Stash the challenge so the post-PIN RESPONSE (reusing this id/nonce,
+        // design §7) can compute the K_pin HMAC. We keep the entry for the whole
+        // fallback round-trip; the PC's pending TTL (150s) bounds it, and we
+        // also drop it on RESPONSE / cancel / socket close.
         if (!biometricCapable()) {
+            pendingFallbacks[id] = PendingFallback(nonce, purpose, fingerprintHex, myPubkey)
             reply(buildJsonObject {
                 put("t", "FALLBACK_REQ"); put("id", id); put("reason", "bio_unavailable")
             })
@@ -594,9 +662,140 @@ class HotspotServerService : Service() {
             is BiometricChallengeSigner.Result.KeyInvalidated ->
                 // Fingerprints changed since pairing → PC must prompt a re-pair (§9).
                 reply(respondError("key_invalidated"))
-            is BiometricChallengeSigner.Result.Error ->
-                reply(respondError(mapBiometricError(result)))
+            is BiometricChallengeSigner.Result.Error -> {
+                // §7: ERROR_LOCKOUT_PERMANENT means the system biometrics are
+                // locked for the long haul — switch this challenge to the
+                // fallback PIN path. We stash the pending fallback (reusing the
+                // same id/nonce the PC is still holding) and emit FALLBACK_REQ so
+                // the PC opens its PIN modal; the subsequent FALLBACK_PIN is
+                // handled by handleFallbackPin below.
+                if (result.androidCode == BiometricPrompt.ERROR_LOCKOUT_PERMANENT ||
+                    result.androidCode == BiometricPrompt.ERROR_LOCKOUT) {
+                    pendingFallbacks[id] = PendingFallback(nonce, purpose, fingerprintHex, myPubkey)
+                    reply(buildJsonObject {
+                        put("t", "FALLBACK_REQ"); put("id", id); put("reason", "bio_locked")
+                    })
+                } else {
+                    reply(respondError(mapBiometricError(result)))
+                }
+            }
         }
+    }
+
+    /**
+     * M3'-B B-5 — handle the FALLBACK_PIN frame the PC sends after the user
+     * confirms the fallback modal (design §7 step 3). The phone prompts for the
+     * 4-digit PIN, verifies it locally against the PBKDF2 hash, and on match
+     * signs the ORIGINAL challenge AAD with K_pin (not K_bio) and replies
+     * RESPONSE { hmac, ts, biometric_ok:false }.
+     *
+     * `fingerprintHex`/`myPubkey` come from THIS connection's ephemeral keypair
+     * (the same one that stashed the pending fallback). We rebuild a fresh ts +
+     * AAD here (the PC reuses the SAME id/nonce/purpose, design §7, but the
+     * phone picks a new ts bound into the AAD — the PC checks freshness on ts).
+     *
+     * Failure modes → RESPONSE error:
+     *   no_pending    — no stashed fallback for this id (PC sent FALLBACK_PIN
+     *                   without a preceding FALLBACK_REQ, or socket changed)
+     *   no_pin_key    — K_pin never minted (ESP failure at pairing)
+     *   pin_not_set   — user never set a fallback PIN
+     *   pin_locked    — 3 wrong PINs / 24h; the channel is locked
+     *   pin_rejected  — wrong PIN (also bumps the tracker; 3 → locked)
+     *   user_cancelled— user backed out of the PIN prompt
+     */
+    private suspend fun handleFallbackPin(
+        req: JsonObject,
+        fingerprintHex: String,
+        myPubkey: ByteArray,
+        reply: suspend (JsonObject) -> Unit,
+    ) {
+        val id = req["id"]?.jsonPrimitive?.content
+        if (id == null) {
+            Log.w(TAG, "FALLBACK_PIN with no id, dropping"); return
+        }
+        fun respondError(error: String) = buildJsonObject {
+            put("t", "RESPONSE"); put("id", id); put("error", error)
+        }
+
+        val pending = pendingFallbacks[id]
+        if (pending == null) { reply(respondError("no_pending")); return }
+
+        // Drive the PIN-entry Activity and await the typed PIN.
+        val deferred = FallbackPinBridge.enqueue(FallbackPinBridge.Request(id, FallbackPinBridge.Kind.VERIFY))
+        try {
+            startActivity(Intent(this, FallbackPinActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                putExtra(FallbackPinActivity.EXTRA_PIN_REQUEST_ID, id)
+            })
+        } catch (t: Throwable) {
+            Log.w(TAG, "could not launch FallbackPinActivity: ${t.message}")
+            FallbackPinBridge.cancel(id)
+            reply(respondError("user_cancelled")); return
+        }
+
+        val pinResult = withTimeoutOrNull(120_000L) { deferred.await() }
+        if (pinResult == null || pinResult is FallbackPinBridge.Result.Cancelled) {
+            pendingFallbacks.remove(id)
+            FallbackPinBridge.cancel(id)
+            reply(respondError("user_cancelled")); return
+        }
+        val pin = (pinResult as FallbackPinBridge.Result.Submitted).pin
+
+        // Verify the PIN locally (PBKDF2) + enforce the 3/24h lockout.
+        val check = try {
+            fallbackStore.verifyFallbackPin(pin, fallbackTracker)
+        } catch (t: Throwable) {
+            Log.w(TAG, "verifyFallbackPin threw: ${t.message}")
+            pendingFallbacks.remove(id)
+            reply(respondError("pin_not_set")); return
+        }
+        when (check) {
+            FallbackSecretStore.PinCheck.LOCKED -> {
+                pendingFallbacks.remove(id)
+                reply(respondError("pin_locked")); return
+            }
+            FallbackSecretStore.PinCheck.NOT_SET -> {
+                pendingFallbacks.remove(id)
+                reply(respondError("pin_not_set")); return
+            }
+            FallbackSecretStore.PinCheck.REJECTED -> {
+                // Wrong PIN. Keep the pending entry? No — the PC treats any
+                // RESPONSE error as terminal for this id (it consumes the id),
+                // so a retry needs a fresh CHALLENGE. Drop our stash too.
+                pendingFallbacks.remove(id)
+                reply(respondError("pin_rejected")); return
+            }
+            FallbackSecretStore.PinCheck.VERIFIED -> { /* proceed to sign */ }
+        }
+
+        // Sign the ORIGINAL challenge AAD with K_pin (NOT K_bio). Same id/nonce/
+        // purpose as the stashed FALLBACK_REQ; fresh ts (PC re-checks freshness).
+        val pinKey = fallbackStore.loadPinKey()
+        if (pinKey == null) {
+            pendingFallbacks.remove(id)
+            reply(respondError("no_pin_key")); return
+        }
+        val ts = System.currentTimeMillis()
+        val fingerprintRaw = MessageDigest.getInstance("SHA-256").digest(myPubkey)
+        val aad = try {
+            Crypto.buildChallengeAad(id, pending.nonce, pending.purpose, ts, fingerprintRaw)
+        } catch (e: Exception) {
+            Log.w(TAG, "buildChallengeAad (fallback) failed: ${e.message}")
+            pendingFallbacks.remove(id)
+            reply(respondError("bad_nonce")); return
+        }
+        val hmac = Crypto.computeChallengeHmac(pinKey, aad)
+        pendingFallbacks.remove(id)
+        reply(buildJsonObject {
+            put("t", "RESPONSE")
+            put("id", id)
+            put("hmac_b64", Crypto.b64encode(hmac))
+            put("ts", ts)
+            // Display-only — the PC ignores this and derives biometricOk=false
+            // from the fact that K_pin (not K_bio) verified (design §7 方案 C).
+            put("biometric_ok", false)
+        })
+        Log.i(TAG, "WS /socket: fallback RESPONSE (K_pin) for id=${id.take(8)}…")
     }
 
     /** Map a signer Error to one of the §3 RESPONSE error codes. */
@@ -604,8 +803,37 @@ class HotspotServerService : Service() {
         BiometricPrompt.ERROR_USER_CANCELED,
         BiometricPrompt.ERROR_NEGATIVE_BUTTON,
         BiometricPrompt.ERROR_CANCELED -> "user_cancelled"
-        // TODO(B-5): ERROR_LOCKOUT_PERMANENT should switch to the fallback PIN path.
         else -> "bio_failed"
+    }
+
+    /**
+     * Best-effort: launch the SET-mode PIN prompt so the user can choose a
+     * fallback PIN right after pairing (design §7 — PIN ready before it's
+     * needed). Fire-and-forget; the result is consumed by setFallbackPin in the
+     * bridge callback. We don't block PAIR_OK on this.
+     */
+    private fun launchSetPinPrompt() {
+        val id = "setpin-" + Crypto.b64encode(ByteArray(8).also { secureRandom.nextBytes(it) })
+        val deferred = FallbackPinBridge.enqueue(FallbackPinBridge.Request(id, FallbackPinBridge.Kind.SET))
+        try {
+            startActivity(Intent(this, FallbackPinActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                putExtra(FallbackPinActivity.EXTRA_PIN_REQUEST_ID, id)
+            })
+        } catch (t: Throwable) {
+            Log.w(TAG, "could not launch FallbackPinActivity (SET): ${t.message}")
+            FallbackPinBridge.cancel(id)
+            return
+        }
+        // Consume the deferred off the IO scope — store the PIN if the user
+        // submitted one. ESP writes are @Synchronized.
+        ioScope.launch {
+            val r = withTimeoutOrNull(120_000L) { deferred.await() }
+            if (r is FallbackPinBridge.Result.Submitted) {
+                try { fallbackStore.setFallbackPin(r.pin) }
+                catch (t: Throwable) { Log.w(TAG, "setFallbackPin failed: ${t.message}") }
+            }
+        }
     }
 
     private fun shutdownServer() {

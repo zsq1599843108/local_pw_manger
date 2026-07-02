@@ -6,7 +6,7 @@ const DB_PATH = path.join(__dirname, '..', 'data', 'passwords.db');
 // Bump whenever a new table or column is added below. Each version block uses
 // CREATE TABLE IF NOT EXISTS / ALTER TABLE ADD COLUMN guarded by a pragma read
 // so existing v0.1/v0.2 databases upgrade in place. See docs/wifi-hotspot-design.md §8.
-const SCHEMA_VERSION = 4;
+const SCHEMA_VERSION = 5;
 
 // Add `column` (with `decl`, e.g. "BLOB" / "INTEGER") to `table` only if it is
 // not already present. better-sqlite3 has no "ADD COLUMN IF NOT EXISTS", so we
@@ -85,6 +85,18 @@ function initDatabase() {
   addColumnIfMissing(db, 'paired_devices', 'device_hmac_key', 'BLOB');
   addColumnIfMissing(db, 'paired_devices', 'last_challenge_at', 'INTEGER');
   addColumnIfMissing(db, 'paired_devices', 'last_fallback_at', 'INTEGER');
+
+  // v5 — M3'-B fallback hardening (design §7 "方案 C"). The 4-digit-PIN path
+  // gets its OWN key, separate from the bio-gated device_hmac_key:
+  //   device_pin_key — 32B raw HMAC key for the NON-biometric fallback. The
+  //                    phone keeps this in EncryptedSharedPreferences (no bio
+  //                    gate) and hands it to us once in PAIR_OK; device_hmac_key
+  //                    stays Keystore-only on the phone (never copied to ESP).
+  // The PC decides biometric-vs-fallback by WHICH key verifies the RESPONSE,
+  // not by trusting the phone's biometric_ok flag — so a controlled phone can't
+  // claim a biometric pass it didn't make. NULL until the phone enrolls one.
+  // See docs/m3b-biometric-challenge-design.md §7/§8.
+  addColumnIfMissing(db, 'paired_devices', 'device_pin_key', 'BLOB');
 
   // Stamp version so downgrades can refuse early instead of mis-reading rows.
   const stamp = db.prepare(`INSERT OR REPLACE INTO schema_meta (key, value) VALUES (?, ?)`);

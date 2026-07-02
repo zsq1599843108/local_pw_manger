@@ -56,7 +56,7 @@ object Crypto {
     private const val IV_SIZE = 12
     private const val CTR_SIZE = 8
     private const val NONCE_SIZE = 16
-    private const val KEY_SIZE = 32          // AES-256
+    const val KEY_SIZE = 32          // AES-256 (also the device HMAC key size)
     private const val TAG_BITS = 128         // 16-byte tag, matches WebCrypto default
     private const val TAG_SIZE = TAG_BITS / 8
 
@@ -451,6 +451,24 @@ object Crypto {
         val ks = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
         val alias = deviceHmacAlias(fpHex)
         if (ks.containsAlias(alias)) ks.deleteEntry(alias)
+    }
+
+    /**
+     * Plain HMAC-SHA256(rawKey, aad) -> 32B with NO Keystore / bio gate.
+     *
+     * Used ONLY by the §7 fallback path: after the user types the 4-digit PIN
+     * (verified locally against the PBKDF2 hash), the phone signs the challenge
+     * AAD with K_pin via this function. K_pin lives in EncryptedSharedPreferences
+     * (no bio gate) — that's the whole point: it's reachable when fingerprints
+     * are unavailable, and the PC limits it to `unlock` (design §7 方案 C). The
+     * bio-gated K_bio path instead goes through initChallengeMac + BiometricPrompt.
+     *
+     * Byte-identical to src/lan-challenge.js#computeChallengeHmac (B-6 vectors).
+     */
+    fun computeChallengeHmac(rawKey: ByteArray, aad: ByteArray): ByteArray {
+        val mac = Mac.getInstance(HMAC_ALGO)
+        mac.init(SecretKeySpec(rawKey, HMAC_ALGO))
+        return mac.doFinal(aad)
     }
 
     /**

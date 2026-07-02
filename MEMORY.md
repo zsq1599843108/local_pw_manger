@@ -43,6 +43,8 @@
 | ⭐⭐⭐ | `.../HotspotPairActivity.kt` | **M1' 主 Launcher**：Start/Stop server + 实时 IP 列表 |
 | ⭐⭐⭐ | `.../HotspotServerService.kt` | **M1' Ktor 前台服务**：监听 :9876，路由 `/ping` |
 | ⭐⭐ | `.../BiometricDemoActivity.kt` | 指纹认证 demo（M1 实测通过） |
+| ⭐⭐⭐ | `.../FallbackSecretStore.kt` | **B-5** ESP 封装：K_pin + PIN hash/salt + lockout 持久化 |
+| ⭐⭐⭐ | `.../FallbackPinBridge.kt` + `FallbackPinActivity.kt` | **B-5** PIN 输入 Activity（SET/VERIFY）+ service 桥 |
 | ⚠️ | `.../UsbAccessoryActivity.kt` | AOAP USB handler（Win 不可用，DEPRECATED） |
 | ⭐⭐ | `android/app/src/main/res/xml/accessory_filter.xml` | AOAP manufacturer/model 匹配（DEPRECATED 但留给 Linux/Mac） |
 | ⭐ | `android/settings.gradle.kts` | 含国内镜像（aliyun + 华为云） |

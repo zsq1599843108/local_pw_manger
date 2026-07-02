@@ -4,6 +4,16 @@
 
 ## [Unreleased] — v0.3-dev (Wi-Fi 热点改造，前身 AOAP 已 deprecated)
 
+### Added (2026-07-02, M3'-B B-5 第二刀 Android 端 ✅，分支 `feature/m3b-biometric-challenge`)
+- 手机端：`Crypto.computeChallengeHmac(rawKey, aad)` —— 纯 `SecretKeySpec` HMAC（不走 Keystore），K_pin fallback 路径专用；字节镜像 `src/lan-challenge.js#computeChallengeHmac`
+- 手机端：`FallbackSecretStore` —— EncryptedSharedPreferences 封装，存 K_pin / `fallback_pin.{hash,salt,iterations}` / `fallback_lockout.failures`；`getOrCreatePinKey`（idempotent，不静默换 key）/ `setFallbackPin` / `verifyFallbackPin`（含 3/24h lockout 判定 + tracker 持久化）/ `restoreLockout`（服务启动恢复）
+- 手机端：`FallbackPinBridge` + `FallbackPinActivity` —— service↔Activity 异步握手；SET（配对时设定 4 位 PIN，双字段确认）/ VERIFY（fallback 验证）两模式
+- 手机端：`HotspotServerService` 接线 —— PAIR_OK 带 `device_pin_key_b64` + 配对即引导设定 PIN；`handleFallbackPin` 全流程（查 stash → 查 lockout → launch VERIFY → 比对 → K_pin 算 HMAC → `RESPONSE { biometric_ok:false }`）；`handleChallenge` 在 `!biometricCapable()` 和 `ERROR_LOCKOUT(_PERMANENT)` 时 stash + 回 `FALLBACK_REQ`；新增 `pendingFallbacks` stash
+- 依赖：`androidx.security:security-crypto:1.1.0-alpha06`
+- 测试：`ChallengeHmacVectorTest.kt` —— JVM 消费 `m3b_challenge_vectors.json`，AAD/HMAC 与 Node 字节一致（B-6 互验预热）
+- 测试结果：JVM **24/24**、lint **0 error**、JS m3b-challenge **33/33**、向量自检 EXIT 0
+- ⚠️ ESP/Activity/Service 集成属 instrumented-only，留 B-6 真机覆盖
+
 ### Added (2026-06-22, M3'-A Kotlin PAIR handler + 跨语言测试 ✅，分支 `feature/m3-pairing-sync`)
 - 手机端：`Crypto.kt` 加 `PairAttemptTracker`（滑动窗口 5/60s 锁定，@Synchronized 线程安全，镜像 JS `lan-pair-protocol.js`）+ `verifyPin`（±1 窗口容差 + 常量时间字符串比较）
 - 手机端：`HotspotServerService` 加 service-level `pinTracker`（**跨连接共享**）+ `userApprovesNext` 标志位 + `handlePairRequest` 状态机：lockout 检查 → PIN 校验 → 用户确认 → `PAIR_OK`/`PAIR_REJECT`

@@ -55,8 +55,10 @@
 - [x] **B-3** @ 617f754 — `HotspotServerService.handleChallenge` dispatcher + `ChallengeBridge` + 透明 `ChallengePromptActivity` + manifest/theme
 - [ ] **reviewer B-2 待办**（清理）：#2 过时注释（service 顶部 TODO(B-2)）/ #3 文档 §4「15B」§5「import」/ #4 catch 窄化到 StrongBoxUnavailableException
 - [ ] **B-4** — PC 端 `src/lan-challenge.js`（verify hmac/ts/nonce/purpose/fingerprint）+ `src/public/js/challenge-ui.js` + Node 测试
-- [ ] **B-5** — fallback 4 位 PIN + 24h lockout（**先确认 §7 双副本方案**）+ reviewer 待办 #1（EncryptedSharedPreferences 持久化，作 PAIR_OK 下发 + fallback 计算同一来源）
-- [ ] **B-6** — 跨语言测试向量 JVM 互验（消费 `android/app/src/test/resources/m3b_challenge_vectors.json`）
+- [x] **B-5** — fallback 4 位 PIN + 24h lockout（方案 C 独立 K_pin）+ reviewer 待办 #1（ESP 持久化）
+  - 第一刀（PC + Kotlin tracker/PBKDF2）@ 1090b52 ✅
+  - 第二刀（Android 端）✅ 本地绿：`computeChallengeHmac` + `FallbackSecretStore`(ESP) + `FallbackPinBridge`/`FallbackPinActivity` + Service 接线（PAIR_OK 带 `device_pin_key_b64` + 配对即设定 PIN + `handleFallbackPin` + `ERROR_LOCKOUT(_PERMANENT)`→FALLBACK_REQ）。JVM 24/24 / lint 0 / JS 33/33
+- [ ] **B-6** — 真机实测 fallback 全流程 + 跨语言 JVM 互验收尾（`ChallengeHmacVectorTest` 已消费向量；补 instrumented ESP/lockout 重启测试）
 - [ ] **B-7** — 风险登记 + CHANGELOG + 真机实测（指纹注册变更 / StrongBox 缺失降级 / Android 12+ 后台拉 Activity）
 
 ⚠️ 已知依赖（非 B 缺陷）：M3'-A 每连接重生 keypair → CHALLENGE 仅同连接 Keystore 命中（持久身份 M4'）；Service 后台拉 prompt Activity 受 Android 12+ 限，依赖交互前台豁免

@@ -78,4 +78,11 @@ dependencies {
     // scripts/gen-m2-interop-vectors.js into src/test/resources/).
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20231013")
+
+    // M3'-B B-5 (方案 C): EncryptedSharedPreferences holds K_pin (the no-bio-gate
+    // fallback HMAC key), the PBKDF2 hash+salt of the 4-digit fallback PIN, and
+    // the FallbackPinTracker failure timestamps — so a service restart neither
+    // mints a fresh K_pin (which the PC would reject) nor resets the 24h lockout
+    // (design §8). K_bio is NEVER written here (it stays Keystore-only).
+    implementation("androidx.security:security-crypto:1.1.0-alpha06")
 }
